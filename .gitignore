@@ -1,1 +1,15 @@
-.ideahttp-client.env.json
+# IDE
+.idea
+http-client.env.json
+
+# Build artifacts
+active-window
+
+# Environment and secrets
+.env
+
+# Session data
+rescuetime-sessions.json
+
+# Go build cache
+go.sum

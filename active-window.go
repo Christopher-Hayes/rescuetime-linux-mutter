@@ -7,39 +7,98 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
-// HyprlandWindow represents the JSON structure returned by hyprctl activewindow -j
-type HyprlandWindow struct {
-	Address   string `json:"address"`
-	Mapped    bool   `json:"mapped"`
-	Hidden    bool   `json:"hidden"`
-	At        [2]int `json:"at"`
-	Size      [2]int `json:"size"`
-	Workspace struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"workspace"`
-	Floating     bool   `json:"floating"`
-	Pseudo       bool   `json:"pseudo"`
-	Monitor      int    `json:"monitor"`
-	Class        string `json:"class"`
-	Title        string `json:"title"`
-	InitialClass string `json:"initialClass"`
-	InitialTitle string `json:"initialTitle"`
-	Pid          int    `json:"pid"`
-	Xwayland     bool   `json:"xwayland"`
-	Pinned       bool   `json:"pinned"`
-	Fullscreen   int    `json:"fullscreen"`
+// Configuration constants for tracking behavior
+const (
+	// Session tracking thresholds
+	defaultMergeThreshold = 30 * time.Second // Merge sessions if gap is less than this
+	defaultMinDuration    = 10 * time.Second // Ignore sessions shorter than this
+	defaultPollInterval   = 200 * time.Millisecond
+	defaultSubmitInterval = 15 * time.Minute
+
+	// API retry configuration
+	maxAPIRetries     = 3
+	baseRetryDelay    = 1 * time.Second
+	apiTimeout        = 10 * time.Second
+	maxOfflineDuration = 4 * time.Hour // RescueTime API limit for offline time
+
+	// D-Bus configuration
+	dbusDestination = "org.gnome.Shell"
+	dbusObjectPath  = "/org/gnome/shell/extensions/FocusedWindow"
+	dbusInterface   = "org.gnome.shell.extensions.FocusedWindow"
+	dbusMethod      = dbusInterface + ".Get"
+)
+
+// MutterWindow represents the window information from GNOME Shell's FocusedWindow extension
+type MutterWindow struct {
+	Title              string      `json:"title"`
+	WmClass            string      `json:"wm_class"`
+	WmClassInstance    string      `json:"wm_class_instance"`
+	Pid                int32       `json:"pid"`
+	Id                 uint64      `json:"id"`
+	Width              int32       `json:"width"`
+	Height             int32       `json:"height"`
+	X                  int32       `json:"x"`
+	Y                  int32       `json:"y"`
+	Focus              bool        `json:"focus"`
+	InCurrentWorkspace bool        `json:"in_current_workspace"`
+	Moveable           bool        `json:"moveable"`
+	Resizeable         bool        `json:"resizeable"`
+	CanClose           bool        `json:"canclose"`
+	CanMaximize        bool        `json:"canmaximize"`
+	Maximized          bool        `json:"maximized"`
+	CanMinimize        bool        `json:"canminimize"`
+	Display            interface{} `json:"display"`
+	FrameType          int32       `json:"frame_type"`
+	WindowType         int32       `json:"window_type"`
+	Layer              int32       `json:"layer"`
+	Monitor            int32       `json:"monitor"`
+	Role               string      `json:"role"`
+	Area               interface{} `json:"area"`
+	AreaAll            interface{} `json:"area_all"`
+	AreaCust           interface{} `json:"area_cust"`
+}
+
+// Global variables for configuration
+var (
+	debugMode   bool
+	verboseMode bool
+)
+
+// debugLog prints debug messages if debug mode is enabled
+func debugLog(format string, args ...interface{}) {
+	if debugMode {
+		log.Printf("[DEBUG] "+format, args...)
+	}
+}
+
+// verboseLog prints verbose messages if verbose mode is enabled
+func verboseLog(format string, args ...interface{}) {
+	if verboseMode || debugMode {
+		log.Printf("[VERBOSE] "+format, args...)
+	}
+}
+
+// infoLog prints info messages (always shown)
+func infoLog(format string, args ...interface{}) {
+	log.Printf("[INFO] "+format, args...)
+}
+
+// errorLog prints error messages (always shown)
+func errorLog(format string, args ...interface{}) {
+	log.Printf("[ERROR] "+format, args...)
 }
 
 // ActivitySession represents a single continuous session with an application
@@ -127,7 +186,7 @@ func activateWithRescueTime(email, password string) (*ActivationResponse, error)
 	req.Header.Set("User-Agent", "RescueTime/2.16.5.1 (Linux)")
 
 	// Send request
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: apiTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %v", err)
@@ -295,16 +354,13 @@ func summaryToUserClientEvent(summary ActivitySummary) UserClientEventPayload {
 
 // submitToRescueTime submits activity data to RescueTime API with retry logic (legacy offline time API)
 func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
-	const maxRetries = 3
-	const baseDelay = 1 * time.Second
-
 	var lastErr error
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxAPIRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
-			delay := baseDelay * time.Duration(math.Pow(2, float64(attempt-1)))
-			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxRetries)
+			delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt-1)))
+			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxAPIRetries)
 			time.Sleep(delay)
 		}
 
@@ -325,7 +381,7 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 		req.Header.Set("Content-Type", "application/json")
 
 		// Send request
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := &http.Client{Timeout: apiTimeout}
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %v", err)
@@ -350,22 +406,19 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 		}
 	}
 
-	return fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
+	return fmt.Errorf("failed after %d attempts: %v", maxAPIRetries, lastErr)
 }
 
 // submitUserClientEvent submits activity data to native RescueTime user_client_events API
 func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error {
-	const maxRetries = 3
-	const baseDelay = 1 * time.Second
-
 	var lastErr error
 	var tryBearerAuth bool
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < maxAPIRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
-			delay := baseDelay * time.Duration(math.Pow(2, float64(attempt-1)))
-			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxRetries)
+			delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt-1)))
+			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxAPIRetries)
 			time.Sleep(delay)
 		}
 
@@ -418,7 +471,7 @@ func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error 
 		req.Header.Set("User-Agent", "RescueTime/2.16.5.1 (Linux)")
 
 		// Send request
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := &http.Client{Timeout: apiTimeout}
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = fmt.Errorf("request failed: %v", err)
@@ -458,7 +511,7 @@ func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error 
 		}
 	}
 
-	return fmt.Errorf("failed after %d attempts: %v", maxRetries, lastErr)
+	return fmt.Errorf("failed after %d attempts: %v", maxAPIRetries, lastErr)
 }
 
 // submitActivitiesToRescueTime submits all activity summaries to RescueTime
@@ -508,15 +561,25 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 				fmt.Printf("[FALLBACK] Attempting legacy API for %s...\n", summary.AppClass)
 
 				legacyPayload := summaryToPayload(summary)
-				err = submitToRescueTime(apiKey, legacyPayload)
-				usedFallback = true
+				// Validate before submitting
+				if validateErr := validatePayload(legacyPayload); validateErr != nil {
+					err = fmt.Errorf("invalid payload: %v", validateErr)
+				} else {
+					err = submitToRescueTime(apiKey, legacyPayload)
+					usedFallback = true
+				}
 			} else {
 				nativeSuccessCount++
 			}
 		} else {
 			// No native credentials, use legacy API directly
 			payload := summaryToPayload(summary)
-			err = submitToRescueTime(apiKey, payload)
+			// Validate before submitting
+			if validateErr := validatePayload(payload); validateErr != nil {
+				err = fmt.Errorf("invalid payload: %v", validateErr)
+			} else {
+				err = submitToRescueTime(apiKey, payload)
+			}
 		}
 
 		if err != nil {
@@ -542,8 +605,8 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 func NewActivityTracker() *ActivityTracker {
 	return &ActivityTracker{
 		sessions:       make([]ActivitySession, 0),
-		mergeThreshold: 30 * time.Second, // merge sessions if gap is less than 30s
-		minDuration:    10 * time.Second, // ignore sessions shorter than 10s
+		mergeThreshold: defaultMergeThreshold,
+		minDuration:    defaultMinDuration,
 	}
 }
 
@@ -707,18 +770,38 @@ func (at *ActivityTracker) ClearCompletedSessions() {
 	at.sessions = make([]ActivitySession, 0)
 }
 
-func getActiveWindow() (*HyprlandWindow, error) {
-	// Use hyprctl to get active window information in JSON format
-	cmd := exec.Command("hyprctl", "activewindow", "-j")
-	output, err := cmd.Output()
+func getActiveWindow() (*MutterWindow, error) {
+	// Connect to session bus
+	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get active window from hyprctl: %v", err)
+		return nil, fmt.Errorf("failed to connect to session bus: %v", err)
+	}
+	defer conn.Close()
+
+	debugLog("Connected to D-Bus session bus")
+
+	// Call the FocusedWindow extension
+	obj := conn.Object(dbusDestination, dbusObjectPath)
+	call := obj.Call(dbusMethod, 0)
+	
+	if call.Err != nil {
+		return nil, fmt.Errorf("failed to call FocusedWindow.Get: %v\n\nTroubleshooting:\n  1. Verify extension is installed: gnome-extensions list | grep focused\n  2. Enable if needed: gnome-extensions enable focused-window-dbus@nichijou.github.io\n  3. Test D-Bus manually: gdbus call --session --dest org.gnome.Shell --object-path /org/gnome/shell/extensions/FocusedWindow --method org.gnome.shell.extensions.FocusedWindow.Get\n  4. Run: ./verify-setup.sh", call.Err)
 	}
 
-	var window HyprlandWindow
-	err = json.Unmarshal(output, &window)
+	// The response is a tuple with a JSON string
+	var jsonStr string
+	err = call.Store(&jsonStr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse hyprctl JSON output: %v", err)
+		return nil, fmt.Errorf("failed to parse D-Bus response: %v", err)
+	}
+
+	debugLog("Received D-Bus response: %s", jsonStr)
+
+	// Parse the JSON response
+	var window MutterWindow
+	err = json.Unmarshal([]byte(jsonStr), &window)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse window JSON: %v", err)
 	}
 
 	return &window, nil
@@ -737,7 +820,7 @@ func getActiveWindowClass() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return window.Class, nil
+	return window.WmClass, nil
 }
 
 func formatWindowOutput(windowName, windowClass string) string {
@@ -745,6 +828,140 @@ func formatWindowOutput(windowName, windowClass string) string {
 		return fmt.Sprintf("Active Window: %s (%s)", windowName, windowClass)
 	}
 	return fmt.Sprintf("Active Window: %s", windowName)
+}
+
+// validateConfiguration checks critical configuration before starting
+func validateConfiguration(submitToAPI bool, dryRun bool, apiKey string, submissionInterval time.Duration, pollInterval time.Duration) error {
+	// Validate submission interval
+	if submissionInterval < 1*time.Minute {
+		return fmt.Errorf("submission interval must be at least 1 minute, got %v", submissionInterval)
+	}
+
+	// Validate poll interval
+	if pollInterval < 50*time.Millisecond {
+		return fmt.Errorf("poll interval too short (minimum 50ms), got %v", pollInterval)
+	}
+	if pollInterval > 5*time.Second {
+		errorLog("Warning: poll interval %v is unusually long, may miss window changes", pollInterval)
+	}
+
+	// Validate API key if submission is enabled
+	if submitToAPI && !dryRun {
+		if apiKey == "" {
+			return fmt.Errorf("RESCUE_TIME_API_KEY not found in .env file\nRun: cp .env.example .env\nThen edit .env and add your API key from https://www.rescuetime.com/anapi/manage")
+		}
+		if len(apiKey) < 20 {
+			return fmt.Errorf("RESCUE_TIME_API_KEY appears invalid (too short: %d chars)\nGet your API key from https://www.rescuetime.com/anapi/manage", len(apiKey))
+		}
+	}
+
+	// Check environment
+	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
+		return fmt.Errorf("no graphical display found (neither WAYLAND_DISPLAY nor DISPLAY set)\nMake sure you're running this in a graphical session")
+	}
+
+	return nil
+}
+
+// validatePayload checks if a payload is valid before submission
+func validatePayload(payload RescueTimePayload) error {
+	if payload.ActivityName == "" {
+		return fmt.Errorf("activity_name is required")
+	}
+	if payload.Duration <= 0 {
+		return fmt.Errorf("duration must be positive, got %d", payload.Duration)
+	}
+	if payload.Duration > int(maxOfflineDuration.Minutes()) {
+		return fmt.Errorf("duration exceeds RescueTime limit of %v hours: %d minutes", maxOfflineDuration.Hours(), payload.Duration)
+	}
+	if payload.StartTime == "" {
+		return fmt.Errorf("start_time is required")
+	}
+	// Validate start_time format "YYYY-MM-DD HH:MM:SS"
+	_, err := time.Parse("2006-01-02 15:04:05", payload.StartTime)
+	if err != nil {
+		return fmt.Errorf("invalid start_time format (expected YYYY-MM-DD HH:MM:SS): %s", payload.StartTime)
+	}
+	return nil
+}
+
+// previewSubmission shows what would be submitted in dry-run mode
+func previewSubmission(summaries map[string]ActivitySummary) {
+	if len(summaries) == 0 {
+		fmt.Println("No activities to preview.")
+		return
+	}
+
+	fmt.Printf("\n=== DRY-RUN: Would submit %d activities ===\n", len(summaries))
+	
+	for _, summary := range summaries {
+		// Skip activities with very short duration (< 1 minute)
+		if summary.TotalDuration < time.Minute {
+			debugLog("Skipping %s (duration < 1 minute)", summary.AppClass)
+			continue
+		}
+
+		payload := summaryToPayload(summary)
+		
+		// Validate payload before submission
+		if err := validatePayload(payload); err != nil {
+			errorLog("Invalid payload for %s: %v", summary.AppClass, err)
+			continue
+		}
+		
+		jsonData, _ := json.MarshalIndent(payload, "", "  ")
+		
+		fmt.Printf("\n[PREVIEW] Would submit:\n%s\n", string(jsonData))
+	}
+	
+	fmt.Println("\n=== End of preview ===")
+}
+
+// saveSummariesToFile saves activity summaries to a JSON file
+func saveSummariesToFile(filepath string, summaries map[string]ActivitySummary) error {
+	// Convert map to slice for better JSON formatting
+	type SavedSummary struct {
+		AppClass        string    `json:"app_class"`
+		ActivityDetails string    `json:"activity_details"`
+		TotalDuration   string    `json:"total_duration"`
+		SessionCount    int       `json:"session_count"`
+		FirstSeen       time.Time `json:"first_seen"`
+		LastSeen        time.Time `json:"last_seen"`
+	}
+
+	type SavedData struct {
+		Timestamp time.Time       `json:"timestamp"`
+		Summaries []SavedSummary  `json:"summaries"`
+	}
+
+	savedSummaries := make([]SavedSummary, 0, len(summaries))
+	for _, summary := range summaries {
+		savedSummaries = append(savedSummaries, SavedSummary{
+			AppClass:        summary.AppClass,
+			ActivityDetails: summary.ActivityDetails,
+			TotalDuration:   summary.TotalDuration.String(),
+			SessionCount:    summary.SessionCount,
+			FirstSeen:       summary.FirstSeen,
+			LastSeen:        summary.LastSeen,
+		})
+	}
+
+	data := SavedData{
+		Timestamp: time.Now(),
+		Summaries: savedSummaries,
+	}
+
+	jsonData, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal summaries: %v", err)
+	}
+
+	err = os.WriteFile(filepath, jsonData, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write file: %v", err)
+	}
+
+	return nil
 }
 
 // printActivitySummary prints a summary of tracked activities
@@ -785,7 +1002,15 @@ func getCurrentWindowInfo() (string, error) {
 	return formatWindowOutput(windowName, windowClass), nil
 }
 
-func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration) {
+func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool) {
+	// Add panic recovery to prevent crashes
+	defer func() {
+		if r := recover(); r != nil {
+			errorLog("PANIC recovered in monitorWindowChanges: %v", r)
+			errorLog("Stack trace will be printed by the runtime")
+		}
+	}()
+
 	var lastAppClass, lastWindowTitle string
 
 	// Create activity tracker
@@ -798,18 +1023,19 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 	// Get initial window info and start the first session
 	window, err := getActiveWindow()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting initial window info: %v\n", err)
+		errorLog("Error getting initial window info: %v", err)
 		return
 	}
 
 	// Start the initial session
-	tracker.StartSession(window.Class, window.Title)
-	lastAppClass = window.Class
+	tracker.StartSession(window.WmClass, window.Title)
+	lastAppClass = window.WmClass
 	lastWindowTitle = window.Title
 
 	// Print initial window
-	currentInfo := formatWindowOutput(window.Title, window.Class)
+	currentInfo := formatWindowOutput(window.Title, window.WmClass)
 	fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
+	verboseLog("Started tracking: %s", currentInfo)
 
 	pollTicker := time.NewTicker(interval)
 	defer pollTicker.Stop()
@@ -817,25 +1043,47 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 	var submitTicker *time.Ticker
 	var submitChan <-chan time.Time
 
-	if submitToAPI {
+	if submitToAPI && !dryRun {
 		submitTicker = time.NewTicker(submissionInterval)
 		defer submitTicker.Stop()
 		submitChan = submitTicker.C
-		fmt.Printf("API submission enabled: will submit every %v\n", submissionInterval)
+		infoLog("API submission enabled: will submit every %v", submissionInterval)
+	} else if dryRun {
+		submitTicker = time.NewTicker(submissionInterval)
+		defer submitTicker.Stop()
+		submitChan = submitTicker.C
+		infoLog("DRY-RUN mode: will show what would be submitted every %v (no actual API calls)", submissionInterval)
 	}
 
 	for {
 		select {
 		case <-sigChan:
 			fmt.Println("\nShutting down window monitor...")
+			infoLog("Received shutdown signal")
 
 			// End the current session
 			tracker.EndCurrentSession()
 
 			// Submit final data if API submission is enabled
-			if submitToAPI {
+			if submitToAPI && !dryRun {
+				infoLog("Submitting final data before shutdown...")
 				summaries := tracker.GetActivitySummaries()
 				submitActivitiesToRescueTime(apiKey, summaries)
+			} else if dryRun {
+				infoLog("DRY-RUN: Final submission preview")
+				summaries := tracker.GetActivitySummaries()
+				previewSubmission(summaries)
+			}
+
+			// Save to file if requested
+			if saveToFile {
+				summaries := tracker.GetActivitySummaries()
+				err := saveSummariesToFile("rescuetime-sessions.json", summaries)
+				if err != nil {
+					errorLog("Failed to save sessions to file: %v", err)
+				} else {
+					infoLog("Saved sessions to rescuetime-sessions.json")
+				}
 			}
 
 			// Print summary before exit
@@ -843,31 +1091,49 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			return
 
 		case <-submitChan:
-			// Time to submit data to RescueTime
+			// Time to submit data to RescueTime (or preview in dry-run mode)
 			summaries := tracker.GetActivitySummaries()
-			submitActivitiesToRescueTime(apiKey, summaries)
+			
+			if dryRun {
+				infoLog("DRY-RUN: Submission preview")
+				previewSubmission(summaries)
+			} else {
+				submitActivitiesToRescueTime(apiKey, summaries)
+			}
 
-			// Clear completed sessions after successful submission
+			// Save to file if requested
+			if saveToFile {
+				err := saveSummariesToFile("rescuetime-sessions.json", summaries)
+				if err != nil {
+					errorLog("Failed to save sessions to file: %v", err)
+				} else {
+					verboseLog("Saved sessions to rescuetime-sessions.json")
+				}
+			}
+
+			// Clear completed sessions after submission
 			tracker.ClearCompletedSessions()
 
 		case <-pollTicker.C:
 			window, err := getActiveWindow()
 			if err != nil {
 				// Don't spam errors, just skip this iteration
+				debugLog("Error getting window: %v", err)
 				continue
 			}
 
 			// Check if the application or window title changed
-			if window.Class != lastAppClass || window.Title != lastWindowTitle {
+			if window.WmClass != lastAppClass || window.Title != lastWindowTitle {
 				// Start a new session for the new window/app
-				tracker.StartSession(window.Class, window.Title)
+				tracker.StartSession(window.WmClass, window.Title)
 
 				// Print the change
-				currentInfo := formatWindowOutput(window.Title, window.Class)
+				currentInfo := formatWindowOutput(window.Title, window.WmClass)
 				fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
+				verboseLog("Window changed to: %s (%s)", window.Title, window.WmClass)
 
 				// Update tracking variables
-				lastAppClass = window.Class
+				lastAppClass = window.WmClass
 				lastWindowTitle = window.Title
 			}
 		}
@@ -879,60 +1145,92 @@ func main() {
 	monitor := flag.Bool("monitor", false, "Continuously monitor for window changes")
 	track := flag.Bool("track", false, "Monitor and track time spent in applications")
 	submit := flag.Bool("submit", false, "Submit activity data to RescueTime API")
-	interval := flag.Duration("interval", 200*time.Millisecond, "Polling interval for monitoring mode (e.g., 100ms, 1s)")
-	submissionInterval := flag.Duration("submission-interval", 15*time.Minute, "Interval for submitting data to RescueTime (e.g., 15m, 1h)")
+	dryRun := flag.Bool("dry-run", false, "Show what would be submitted without making API calls")
+	saveToFile := flag.Bool("save", false, "Save activity summaries to rescuetime-sessions.json")
+	debug := flag.Bool("debug", false, "Enable debug logging")
+	verbose := flag.Bool("verbose", false, "Enable verbose logging")
+	interval := flag.Duration("interval", defaultPollInterval, "Polling interval for monitoring mode (e.g., 100ms, 1s)")
+	submissionInterval := flag.Duration("submission-interval", defaultSubmitInterval, "Interval for submitting data to RescueTime (e.g., 15m, 1h)")
 	flag.Parse()
+
+	// Set global debug/verbose flags
+	debugMode = *debug
+	verboseMode = *verbose
+
+	// Configure logging
+	log.SetFlags(log.Ldate | log.Ltime)
+	if debugMode {
+		log.SetPrefix("[rescuetime] ")
+		debugLog("Debug mode enabled")
+	}
 
 	// Check if we're running in a graphical environment (Wayland or X11)
 	if os.Getenv("WAYLAND_DISPLAY") == "" && os.Getenv("DISPLAY") == "" {
-		fmt.Fprintf(os.Stderr, "Error: No graphical display found. Make sure you're running this in a Wayland or X11 environment.\n")
+		errorLog("No graphical display found. Make sure you're running this in a Wayland or X11 environment.")
 		os.Exit(1)
 	}
 
-	// Check if hyprctl is available (required for Wayland/Hyprland)
-	if os.Getenv("WAYLAND_DISPLAY") != "" {
-		_, err := exec.LookPath("hyprctl")
+	// Check if running on GNOME/Mutter
+	sessionType := os.Getenv("XDG_SESSION_TYPE")
+	desktopSession := os.Getenv("XDG_CURRENT_DESKTOP")
+	debugLog("Session type: %s, Desktop: %s", sessionType, desktopSession)
+
+	// Verify D-Bus connection to GNOME Shell extension
+	if *monitor || *track {
+		_, err := getActiveWindow()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: hyprctl not found. This script requires Hyprland on Wayland.\n")
+			errorLog("Failed to connect to GNOME Shell FocusedWindow extension: %v", err)
+			fmt.Fprintf(os.Stderr, "\nMake sure the FocusedWindow GNOME Shell extension is installed and enabled.\n")
+			fmt.Fprintf(os.Stderr, "Installation: https://extensions.gnome.org/extension/5839/focused-window-dbus/\n")
 			os.Exit(1)
 		}
+		verboseLog("Successfully connected to FocusedWindow D-Bus extension")
 	}
 
 	if *monitor || *track {
 		if *track {
-			fmt.Printf("Tracking application usage (polling every %v). Press Ctrl+C to stop and see summary.\n", *interval)
+			infoLog("Tracking application usage (polling every %v). Press Ctrl+C to stop and see summary.", *interval)
 		} else {
-			fmt.Printf("Monitoring window changes (polling every %v). Press Ctrl+C to stop.\n", *interval)
+			infoLog("Monitoring window changes (polling every %v). Press Ctrl+C to stop.", *interval)
 		}
 
 		// Handle API submission setup
 		var apiKey string
-		if *submit {
+		if *submit || *dryRun {
 			// Load environment variables from .env file
 			err := loadEnvFile(".env")
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error loading .env file: %v\n", err)
+				errorLog("Error loading .env file: %v", err)
+				fmt.Fprintf(os.Stderr, "\nCreate .env file: cp .env.example .env\n")
+				fmt.Fprintf(os.Stderr, "Then add your RescueTime API key: https://www.rescuetime.com/anapi/manage\n")
 				os.Exit(1)
 			}
 
 			// Get API key from environment
 			apiKey = os.Getenv("RESCUE_TIME_API_KEY")
-			if apiKey == "" {
-				fmt.Fprintf(os.Stderr, "Error: RESCUE_TIME_API_KEY not found in .env file\n")
+			
+			// Validate configuration before starting
+			if err := validateConfiguration(*submit, *dryRun, apiKey, *submissionInterval, *interval); err != nil {
+				errorLog("Configuration validation failed: %v", err)
 				os.Exit(1)
 			}
 
 			// Call with API submission enabled
-			monitorWindowChanges(*interval, true, apiKey, *submissionInterval)
+			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile)
 		} else {
+			// Validate basic configuration even without API submission
+			if err := validateConfiguration(false, false, "", *submissionInterval, *interval); err != nil {
+				errorLog("Configuration validation failed: %v", err)
+				os.Exit(1)
+			}
 			// Call without API submission
-			monitorWindowChanges(*interval, false, "", 0)
+			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile)
 		}
 	} else {
 		// Single execution mode
 		currentInfo, err := getCurrentWindowInfo()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting window info: %v\n", err)
+			errorLog("Error getting window info: %v", err)
 			os.Exit(1)
 		}
 		fmt.Println(currentInfo)
