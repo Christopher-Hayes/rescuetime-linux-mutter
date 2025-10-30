@@ -1,7 +1,5 @@
 # Testing Guide
 
-This guide helps you test the RescueTime tracker before deploying it to production.
-
 ## Prerequisites
 
 Before testing, ensure:
@@ -361,20 +359,6 @@ echo $WAYLAND_DISPLAY
 echo $DISPLAY
 ```
 
-## Test Checklist
-
-Before deploying to production, ensure all these pass:
-
-- [ ] Test 1: Extension connectivity works
-- [ ] Test 2: Single window query works
-- [ ] Test 3: Window monitoring detects changes
-- [ ] Test 5: Basic tracking shows summary
-- [ ] Test 6: Session persistence creates JSON file
-- [ ] Test 8: Dry-run shows correct data format
-- [ ] Test 10: API submission succeeds
-- [ ] Test 12: Graceful shutdown works
-- [ ] Verified data appears in RescueTime dashboard
-
 ## Next Steps
 
 Once all tests pass:
@@ -383,17 +367,3 @@ Once all tests pass:
 2. Enable service: `systemctl --user enable rescuetime.service`
 3. Monitor for the first few days: `journalctl --user -u rescuetime.service -f`
 4. Verify data in RescueTime dashboard regularly
-
-## Getting Help
-
-If tests fail and you can't resolve:
-
-1. Check the main README.md troubleshooting section
-2. Review logs with `-debug` flag
-3. Verify GNOME Shell extension compatibility
-4. Check RescueTime API status
-5. Open an issue on GitHub with:
-   - Output of failed test
-   - Debug logs
-   - GNOME Shell version
-   - Session type (Wayland/X11)
