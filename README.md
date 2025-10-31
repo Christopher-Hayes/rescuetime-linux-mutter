@@ -75,9 +75,9 @@ git clone https://github.com/Christopher-Hayes/rescuetime-linux-mutter.git
 cd rescuetime-linux-mutter
 
 # Build using the build script (recommended)
-./build.sh
+./scripts/build.sh
 
-# This creates two binaries:
+# This creates two binaries in the root:
 # - active-window: Main tracking application
 # - ignoreApplication: Tool to manage ignored apps
 
@@ -151,8 +151,8 @@ To avoid double-tracking (e.g., when using RescueTime plugins for VS Code or bro
 **Option 1: Interactive CLI Tool (Recommended)**
 
 ```bash
-# Build the ignoreApplication tool
-./build.sh
+# Build the ignoreApplication tool if not already built
+./scripts/build.sh
 
 # Run the interactive tool
 ./ignoreApplication

@@ -7,22 +7,18 @@
 
 A native Linux activity tracker for RescueTime that monitors active windows on GNOME/Mutter via D-Bus and submits time tracking data to RescueTime's API. Forked from a Hyprland implementation.
 
-## Quick Start for New Contributors
+## Agent Collaboration Guide
+
+## Quick Start (First-Time Setup)
+
+> **Status**: Production-ready, modular implementation with Go standard layout
 
 ```bash
-# 1. Prerequisites check
-./verify-setup.sh  # ALWAYS run this first
+# 1. Verify prerequisites (GNOME Shell + FocusedWindow extension)
+./scripts/verify-setup.sh  # ALWAYS run this first
 
-# 2. Build and test
-./build.sh
-./active-window -monitor -debug  # Watch window detection for 30s
-
-# 3. Safe testing workflow (never touches production API)
-./active-window -track -dry-run -submission-interval 1m -save
-
-# 4. Inspect what would be submitted
-cat rescuetime-sessions.json | jq .
-```
+# 2. Build binaries
+./scripts/build.sh
 
 **Common first tasks**: See [Development Workflows](#development-workflows) section below.
 
@@ -97,7 +93,9 @@ Authorization: Bearer {data_key}
 ### Build & Test Cycle
 ```bash
 # Quick compile + verify extension
-./build.sh && ./verify-setup.sh
+**Pre-flight checks** - system readiness validation
+```bash
+./scripts/build.sh && ./scripts/verify-setup.sh
 
 # Debug window detection (watch D-Bus responses)
 ./active-window -monitor -debug
@@ -114,7 +112,7 @@ Authorization: Bearer {data_key}
 - **Never use production API during development** - always start with `-dry-run`
 - **Short intervals for testing** - use `-submission-interval 1m` instead of default 15m
 - **Save to JSON** - use `-save` flag to inspect exact data structure before API submission
-- **Extension verification first** - run `verify-setup.sh` before debugging application logic
+- **Extension verification first** - run `scripts/verify-setup.sh` before debugging application logic
 
 ### Environment Configuration Pattern
 ```bash
@@ -128,7 +126,7 @@ RESCUE_TIME_DATA_KEY=xxx       # Native API (44-char base64)
 ## Code Conventions & Best Practices
 
 ### Constants Over Magic Numbers
-All configurable values are extracted as named constants at the top of `active-window.go`:
+All configurable values are extracted as named constants at the top of `cmd/active-window/main.go`:
 ```go
 const (
     defaultMergeThreshold = 30 * time.Second
@@ -150,7 +148,7 @@ All external inputs are validated before use:
 
 ### Error Messages Must Be Actionable
 Bad: `"failed to connect"`  
-Good: `"failed to connect to D-Bus: %v\n\nTroubleshooting:\n  1. Run: ./verify-setup.sh\n  2. Check extension: gnome-extensions list | grep focused"`
+Good: `"failed to connect to D-Bus: %v\n\nTroubleshooting:\n  1. Run: ./scripts/verify-setup.sh\n  2. Check extension: gnome-extensions list | grep focused"`
 
 Every error should tell the user **what to do next**, not just what went wrong.
 
@@ -168,12 +166,11 @@ func monitorWindowChanges(...) {
 ```
 
 ### Testing Infrastructure
-Tests live in `active-window_test.go` and cover:
-- Validation functions (config, payloads)
-- Data transformations (summary → payload)
-- Core utilities (formatWindowOutput, etc.)
+Tests live alongside source files following Go conventions:
+- `cmd/active-window/main_test.go` - Unit tests for main application
+- `rescuetime/example_test.go` - Example tests showing package usage
 
-Run tests: `go test -v`
+Run tests: `go test -v ./cmd/active-window ./rescuetime`
 
 **Testing philosophy**: Focus on testing business logic and validation. Don't mock D-Bus or HTTP - use integration tests for those.
 
@@ -211,12 +208,21 @@ successLog()  // Always: Successful operations (green, bold)
 
 ## Key Files & Their Roles
 
-- **`active-window.go`**: Monolithic implementation (1000+ lines) - data structures, D-Bus client (window & idle detection), API client, tracking logic, main loop
-- **`common.go`**: Shared D-Bus configuration and data structures (FocusedWindow extension + IdleMonitor)
-- **`build.sh`**: Dependency check + `go build` wrapper with user-friendly error messages
-- **`verify-setup.sh`**: Pre-flight validation (GNOME version, D-Bus connectivity, extension status)
+**Main application:**
+- **`cmd/active-window/main.go`**: Main application (~1000 lines) - tracking logic, API client, main loop
+- **`cmd/active-window/main_test.go`**: Unit tests for main application
+- **`cmd/ignoreApplication/main.go`**: Interactive tool to manage ignored applications
+- **`internal/common/dbus.go`**: Shared D-Bus configuration and data structures (FocusedWindow extension + IdleMonitor)
+- **`rescuetime/client.go`**: RescueTime API client package
+
+**Scripts & verification:**
+- **`scripts/build.sh`**: Dependency check + `go build` wrapper with user-friendly error messages
+- **`scripts/verify-setup.sh`**: Pre-flight validation (GNOME version, D-Bus connectivity, extension status)
+
+**Tests & documentation:**
+- **`rescuetime/example_test.go`**: Example/integration test for API client
 - **`docs/api-docs.md`**: Official RescueTime API documentation (copy from web for offline reference)
-- **`docs/implementation-plan.md`**: Phase-based development roadmap with task status
+- **`docs/TESTING.md`**: Testing guidelines
 
 ## Platform-Specific Gotchas
 
@@ -288,10 +294,10 @@ When creating `.service` files:
 
 ```bash
 # Build and run tests
-./build.sh && go test -v
+./scripts/build.sh && go test -v ./cmd/active-window
 
 # Development iteration with validation
-./build.sh && ./active-window -track -dry-run -submission-interval 1m -verbose
+./scripts/build.sh && ./active-window -track -dry-run -submission-interval 1m -verbose
 
 # Verify D-Bus extension is responding
 gdbus call --session --dest org.gnome.Shell \

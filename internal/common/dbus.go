@@ -1,17 +1,17 @@
-package main
+package common
 
 // D-Bus configuration shared between active-window and ignoreApplication
 const (
-	dbusDestination = "org.gnome.Shell"
-	dbusObjectPath  = "/org/gnome/shell/extensions/FocusedWindow"
-	dbusInterface   = "org.gnome.shell.extensions.FocusedWindow"
-	dbusMethod      = dbusInterface + ".Get"
+	DbusDestination = "org.gnome.Shell"
+	DbusObjectPath  = "/org/gnome/shell/extensions/FocusedWindow"
+	DbusInterface   = "org.gnome.shell.extensions.FocusedWindow"
+	DbusMethod      = DbusInterface + ".Get"
 	
 	// Mutter idle monitor D-Bus configuration
-	idleMonitorDestination = "org.gnome.Mutter.IdleMonitor"
-	idleMonitorObjectPath  = "/org/gnome/Mutter/IdleMonitor/Core"
-	idleMonitorInterface   = "org.gnome.Mutter.IdleMonitor"
-	idleMonitorMethod      = idleMonitorInterface + ".GetIdletime"
+	IdleMonitorDestination = "org.gnome.Mutter.IdleMonitor"
+	IdleMonitorObjectPath  = "/org/gnome/Mutter/IdleMonitor/Core"
+	IdleMonitorInterface   = "org.gnome.Mutter.IdleMonitor"
+	IdleMonitorMethod      = IdleMonitorInterface + ".GetIdletime"
 )
 
 // MutterWindow represents the window information from GNOME Shell's FocusedWindow extension

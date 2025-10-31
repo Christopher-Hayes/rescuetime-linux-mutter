@@ -27,7 +27,7 @@ fi
 
 # Test 2: Check if we're in the right directory
 echo -n "2. Checking project files... "
-if [ -f "active-window.go" ] && [ -f "go.mod" ]; then
+if [ -f "cmd/active-window/main.go" ] && [ -f "go.mod" ]; then
     echo -e "${GREEN}✓${NC}"
 else
     echo -e "${RED}✗${NC}"
@@ -113,10 +113,10 @@ if [ $ERRORS -eq 0 ]; then
     echo -e "${GREEN}✓ All critical checks passed!${NC}"
     echo ""
     echo "Next steps:"
-    echo "  1. If binary not built: ./build.sh"
+    echo "  1. If binary not built: ./scripts/build.sh"
     echo "  2. Test window detection: ./active-window"
     echo "  3. Test monitoring: timeout 30s ./active-window -monitor"
-    echo "  4. See QUICKSTART.md for full setup"
+    echo "  4. See README.md for full setup"
 else
     echo -e "${RED}✗ $ERRORS critical check(s) failed${NC}"
     echo ""

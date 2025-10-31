@@ -17,13 +17,13 @@ fi
 echo "✓ Go is installed ($(go version))"
 
 # Check if we're in the right directory
-if [ ! -f "active-window.go" ]; then
-    echo "❌ Error: active-window.go not found"
+if [ ! -f "cmd/active-window/main.go" ]; then
+    echo "❌ Error: cmd/active-window/main.go not found"
     echo "   Please run this script from the project root directory"
     exit 1
 fi
 
-echo "✓ Found active-window.go"
+echo "✓ Found cmd/active-window/main.go"
 
 # Download dependencies
 echo ""
@@ -33,8 +33,8 @@ go mod download
 # Build the binary
 echo ""
 echo "Building binaries..."
-go build -o active-window .
-go build -tags ignore_app -o ignoreApplication common.go ignoreApplication.go
+go build -o active-window ./cmd/active-window
+go build -tags ignore_app -o ignoreApplication ./cmd/ignoreApplication
 
 if [ -f "active-window" ] && [ -f "ignoreApplication" ]; then
     echo ""
@@ -48,7 +48,7 @@ if [ -f "active-window" ] && [ -f "ignoreApplication" ]; then
     echo "1. Copy .env.example to .env and add your RescueTime API key"
     echo "2. Test with: ./active-window -monitor"
     echo "3. Ignore apps with: ./ignoreApplication"
-    echo "4. See QUICKSTART.md for detailed setup instructions"
+    echo "4. See README.md for detailed setup instructions"
 else
     echo ""
     echo "❌ Build failed"
