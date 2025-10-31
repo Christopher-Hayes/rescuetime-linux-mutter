@@ -197,6 +197,7 @@ successLog()  // Always: Successful operations (green, bold)
 ```
 **Pattern**: Use specific log functions, not generic `log.Printf()` - enables filtering by flag
 **Color library**: Uses `github.com/fatih/color` for terminal colors (similar to Chalk in Node.js)
+**Force colors enabled**: `color.NoColor = false` at startup ensures colors work even when wrapped by commands like `op run` (1Password CLI)
 
 ### Error Handling Strategy
 - **D-Bus failures**: Retry on next poll (1000ms), log once with `debugLog()` to avoid spam
