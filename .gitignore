@@ -15,6 +15,3 @@ http-client.env.json
 # Session data
 rescuetime-sessions.json
 
-# Go build cache
-go.sum
-
