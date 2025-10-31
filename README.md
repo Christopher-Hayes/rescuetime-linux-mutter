@@ -8,17 +8,10 @@ A native Linux activity tracker for [RescueTime](https://www.rescuetime.com) tha
 
 - **Mutter/GNOME Shell Support** - Monitors active window via D-Bus FocusedWindow extension
 - **Idle Detection** - Automatically pauses tracking when you're away from your computer
-- **Smart Session Tracking** - Automatically tracks time spent in each application
 - **Application Filtering** - Ignore specific applications to avoid double-tracking
 - **Intelligent Merging** - Merges brief window switches to the same app (< 30 seconds)
 - **Session Filtering** - Ignores very short sessions (< 10 seconds) to reduce noise
 - **Automatic Submission** - Sends activity data to RescueTime every 15 minutes (configurable)
-- **Graceful Shutdown** - Submits final data on exit (SIGINT/SIGTERM)
-- **Retry Logic** - Exponential backoff for failed API submissions
-- **Colored Output** - Color-coded terminal output for better readability (debug, info, warnings, errors)
-- **Debug Mode** - Extensive logging for troubleshooting (`-debug` flag)
-- **Dry-Run Mode** - Test without making API calls (`-dry-run` flag)
-- **Local Persistence** - Save sessions to JSON file (`-save` flag)
 
 ## Requirements
 
@@ -44,8 +37,7 @@ The application requires the **Focused Window D-Bus** extension to access window
 git clone https://github.com/nichijou/gnome-shell-extension-focused-window-dbus.git
 cd gnome-shell-extension-focused-window-dbus
 make install
-# Restart GNOME Shell: Alt+F2, type 'r', press Enter (X11 only)
-# For Wayland, log out and log back in
+# Log out and log back in to reload GNOME Shell
 gnome-extensions enable focused-window-dbus@nichijou.github.io
 ```
 
@@ -560,30 +552,6 @@ Content-Type: application/json; charset=utf-8
 ```
 
 </details>
-
-## Development Status
-
-### Completed
-- ✅ Mutter+Wayland window detection via D-Bus
-- ✅ Real-time window focus monitoring
-- ✅ Activity session tracking with start/end times
-- ✅ Session merging for brief interruptions
-- ✅ Application filtering (ignore list)
-- ✅ Interactive CLI tool for managing ignored apps
-- ✅ Activity summarization and aggregation
-- ✅ Graceful shutdown with summary display
-- ✅ RescueTime API integration (Offline Time POST)
-- ✅ Automatic 15-minute submission timer
-- ✅ API error handling with exponential backoff
-- ✅ Environment-based configuration (.env file)
-- ✅ Complete reverse engineering of native client API
-- ️✅ Unit tests
-- ️✅ Systemd service template
-
-### TODO
-- ⏸️ Migration to native client API
-- ⏸️ Configuration file support (YAML/JSON)
-- ⏸️ Structured logging (replace fmt.Printf)
 
 ## Related Documentation
 
