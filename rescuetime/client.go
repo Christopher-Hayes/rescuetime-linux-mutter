@@ -52,14 +52,20 @@ type ActivitySummary struct {
 }
 
 // RescueTimePayload represents the data structure for RescueTime's legacy offline time API.
+// Per official API docs: https://www.rescuetime.com/anapi/offline_time_post
+// Either Duration OR EndTime must be provided (not both).
 type RescueTimePayload struct {
-	StartTime       string `json:"start_time"`       // YYYY-MM-DD HH:MM:SS format
-	Duration        int    `json:"duration"`         // duration in minutes
-	ActivityName    string `json:"activity_name"`    // application class
-	ActivityDetails string `json:"activity_details"` // window title/details
+	StartTime       string `json:"start_time"`                  // YYYY-MM-DD HH:MM:SS format (required)
+	Duration        int    `json:"duration,omitempty"`          // duration in minutes (required if EndTime not provided)
+	EndTime         string `json:"end_time,omitempty"`          // YYYY-MM-DD HH:MM:SS format (required if Duration not provided)
+	ActivityName    string `json:"activity_name"`               // application class (required)
+	ActivityDetails string `json:"activity_details,omitempty"` // window title/details (optional)
 }
 
 // UserClientEventPayload represents the native RescueTime user_client_events API format.
+// NOTE: This API endpoint is NOT documented in the official RescueTime API docs.
+// It has been reverse-engineered from the official desktop client.
+// For official offline time posting, use the offline_time_post API instead.
 type UserClientEventPayload struct {
 	UserClientEvent UserClientEvent `json:"user_client_event"`
 }
@@ -128,6 +134,7 @@ func (c *Client) debugLog(format string, args ...interface{}) {
 }
 
 // SummaryToPayload converts an ActivitySummary to RescueTimePayload format (legacy API).
+// Uses the duration field as specified in the official API documentation.
 func SummaryToPayload(summary ActivitySummary) RescueTimePayload {
 	// Convert duration to minutes (rounded up)
 	durationMinutes := int(math.Ceil(summary.TotalDuration.Minutes()))
@@ -142,6 +149,21 @@ func SummaryToPayload(summary ActivitySummary) RescueTimePayload {
 		StartTime:       startTimeFormatted,
 		Duration:        durationMinutes,
 		ActivityName:    activityName,
+		ActivityDetails: summary.ActivityDetails,
+	}
+}
+
+// SummaryToPayloadWithEndTime converts an ActivitySummary to RescueTimePayload format using end_time instead of duration.
+// This is an alternative to SummaryToPayload that uses the end_time field as allowed by the API.
+func SummaryToPayloadWithEndTime(summary ActivitySummary) RescueTimePayload {
+	// Format start and end times as "YYYY-MM-DD HH:MM:SS"
+	startTimeFormatted := summary.FirstSeen.Format("2006-01-02 15:04:05")
+	endTimeFormatted := summary.LastSeen.Format("2006-01-02 15:04:05")
+
+	return RescueTimePayload{
+		StartTime:       startTimeFormatted,
+		EndTime:         endTimeFormatted,
+		ActivityName:    summary.AppClass,
 		ActivityDetails: summary.ActivityDetails,
 	}
 }
@@ -167,28 +189,64 @@ func SummaryToUserClientEvent(summary ActivitySummary) UserClientEventPayload {
 }
 
 // ValidatePayload checks if a RescueTimePayload is valid before submission.
+// Per official API docs, either duration OR end_time must be provided (not both, not neither).
 func ValidatePayload(payload RescueTimePayload) error {
 	if payload.ActivityName == "" {
 		return fmt.Errorf("activity_name is required")
-	}
-	if payload.Duration <= 0 {
-		return fmt.Errorf("duration must be positive, got %d", payload.Duration)
-	}
-	if payload.Duration > int(maxOfflineDuration.Minutes()) {
-		return fmt.Errorf("duration exceeds RescueTime limit of %v hours: %d minutes", maxOfflineDuration.Hours(), payload.Duration)
 	}
 	if payload.StartTime == "" {
 		return fmt.Errorf("start_time is required")
 	}
 	// Validate start_time format "YYYY-MM-DD HH:MM:SS"
-	_, err := time.Parse("2006-01-02 15:04:05", payload.StartTime)
+	startTime, err := time.Parse("2006-01-02 15:04:05", payload.StartTime)
 	if err != nil {
 		return fmt.Errorf("invalid start_time format (expected YYYY-MM-DD HH:MM:SS): %s", payload.StartTime)
 	}
+
+	// Either duration OR end_time must be provided (not both, not neither)
+	hasDuration := payload.Duration > 0
+	hasEndTime := payload.EndTime != ""
+
+	if !hasDuration && !hasEndTime {
+		return fmt.Errorf("either duration or end_time must be provided")
+	}
+	if hasDuration && hasEndTime {
+		return fmt.Errorf("cannot provide both duration and end_time (use one or the other)")
+	}
+
+	// Validate duration if provided
+	if hasDuration {
+		if payload.Duration <= 0 {
+			return fmt.Errorf("duration must be positive, got %d", payload.Duration)
+		}
+		if payload.Duration > int(maxOfflineDuration.Minutes()) {
+			return fmt.Errorf("duration exceeds RescueTime API limit of %v hours: %d minutes", maxOfflineDuration.Hours(), payload.Duration)
+		}
+	}
+
+	// Validate end_time if provided
+	if hasEndTime {
+		endTime, err := time.Parse("2006-01-02 15:04:05", payload.EndTime)
+		if err != nil {
+			return fmt.Errorf("invalid end_time format (expected YYYY-MM-DD HH:MM:SS): %s", payload.EndTime)
+		}
+		// End time must be after start time
+		if !endTime.After(startTime) {
+			return fmt.Errorf("end_time must be after start_time (start: %s, end: %s)", payload.StartTime, payload.EndTime)
+		}
+		// Calculate duration and check it doesn't exceed max
+		calculatedDuration := endTime.Sub(startTime)
+		if calculatedDuration > maxOfflineDuration {
+			return fmt.Errorf("time span from start_time to end_time exceeds RescueTime API limit of %v hours: %v", maxOfflineDuration.Hours(), calculatedDuration)
+		}
+	}
+
 	return nil
 }
 
 // SubmitLegacy submits activity data to RescueTime's legacy offline_time_post API with retry logic.
+// Official API documentation: https://www.rescuetime.com/anapi/offline_time_post
+// Note: API is limited to 4 hour maximum duration and cannot post to future dates.
 func (c *Client) SubmitLegacy(payload RescueTimePayload) error {
 	var lastErr error
 
@@ -224,7 +282,7 @@ func (c *Client) SubmitLegacy(payload RescueTimePayload) error {
 
 		c.debugLog("Submitting payload: %s", string(jsonData))
 
-		// Create request
+		// Create request - API key goes in query parameter per official docs
 		url := fmt.Sprintf("https://www.rescuetime.com/anapi/offline_time_post?key=%s", c.APIKey)
 		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 		if err != nil {
@@ -256,14 +314,20 @@ func (c *Client) SubmitLegacy(payload RescueTimePayload) error {
 		c.debugLog("Response headers: %v", resp.Header)
 		c.debugLog("Response body: %s", string(body))
 
-		// Check response status
+		// Check response status - 200-299 is success per API docs
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			color.New(color.FgGreen, color.Bold).Printf("[SUCCESS] Submitted to RescueTime: %s (%d min)\n", payload.ActivityName, payload.Duration)
+			durationInfo := ""
+			if payload.Duration > 0 {
+				durationInfo = fmt.Sprintf("%d min", payload.Duration)
+			} else if payload.EndTime != "" {
+				durationInfo = fmt.Sprintf("%s to %s", payload.StartTime, payload.EndTime)
+			}
+			color.New(color.FgGreen, color.Bold).Printf("[SUCCESS] Submitted to RescueTime: %s (%s)\n", payload.ActivityName, durationInfo)
 			return nil
 		}
 
 		lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
-		// Don't retry on client errors (4xx)
+		// Don't retry on client errors (4xx) - per API docs, 400 indicates bad request
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return lastErr
 		}
@@ -273,6 +337,9 @@ func (c *Client) SubmitLegacy(payload RescueTimePayload) error {
 }
 
 // SubmitNative submits activity data to RescueTime's native user_client_events API.
+// NOTE: This API endpoint is NOT documented in official RescueTime API documentation.
+// It has been reverse-engineered from the official desktop client.
+// For official API support, use SubmitLegacy (offline_time_post) instead.
 func (c *Client) SubmitNative(payload UserClientEventPayload) error {
 	var lastErr error
 	var tryBearerAuth bool
