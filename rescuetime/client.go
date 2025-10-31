@@ -179,7 +179,9 @@ func SummaryToUserClientEvent(summary ActivitySummary) UserClientEventPayload {
 
 	return UserClientEventPayload{
 		UserClientEvent: UserClientEvent{
-			EventDescription: summary.AppClass,
+			// EventDescription: summary.AppClass,
+			// Reduce redundancy by leaving EventDescription empty
+			EventDescription: "",
 			StartTime:        startTimeFormatted,
 			EndTime:          endTimeFormatted,
 			WindowTitle:      summary.ActivityDetails,
@@ -456,9 +458,9 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 
 	color.New(color.FgCyan, color.Bold).Printf("\n=== Submitting %d activities to RescueTime ===\n", len(summaries))
 	if hasNativeCredentials {
-		color.Cyan("[INFO] Native API credentials detected, will try native API first with legacy fallback\n")
+		color.Cyan("Native API credentials detected, will try native API first with legacy fallback\n")
 	} else {
-		color.Cyan("[INFO] Using legacy offline time API (no native credentials found)\n")
+		color.Cyan("Using legacy offline time API (no native credentials found)\n")
 	}
 
 	successCount := 0

@@ -69,7 +69,7 @@ func verboseLog(format string, args ...interface{}) {
 // infoLog prints info messages (always shown)
 func infoLog(format string, args ...interface{}) {
 	timestamp := time.Now().Format("15:04")
-	log.Printf("%s %s", timestamp, colorInfo("[INFO] "+format, args...))
+	log.Printf("%s %s", timestamp, colorInfo(format, args...))
 }
 
 // errorLog prints error messages (always shown)
@@ -518,7 +518,7 @@ func formatWindowOutput(tracker *ActivityTracker, windowName, windowClass string
 		// If ignored, use muted black/gray colors
 		if isIgnored {
 			return fmt.Sprintf("%s: %s %s",
-				color.HiBlackString("Active Window"),
+				color.HiBlackString("(ignored) Active Window"),
 				color.HiBlackString("%s", windowName),
 				color.HiBlackString("(%s)", windowClass))
 		}

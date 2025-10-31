@@ -160,7 +160,7 @@ Get detailed information during dry-run:
 ```
 
 **Expected:** Detailed logs + submission previews
-**Look for:** `[INFO]`, `[VERBOSE]`, and preview outputs
+**Look for:** `[VERBOSE]`, and preview outputs
 
 ### Test 10: Short Interval API Test (CAREFUL!)
 
@@ -178,7 +178,7 @@ timeout 120s ./active-window -track -submit -submission-interval 1m -verbose
 
 **Expected logs:**
 ```
-[INFO] API submission enabled: will submit every 1m0s
+API submission enabled: will submit every 1m0s
 ...
 ✓ Submitted to RescueTime: firefox (5 min)
 ✓ Submitted to RescueTime: Code (3 min)
@@ -229,7 +229,7 @@ Test handling of Ctrl+C:
 **Expected:**
 ```
 Shutting down window monitor...
-[INFO] Submitting final data before shutdown...
+Submitting final data before shutdown...
 ✓ Submitted to RescueTime: ...
 
 === Activity Summary ===
