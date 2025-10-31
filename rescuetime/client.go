@@ -456,15 +456,32 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	// Check if we have native API credentials
 	hasNativeCredentials := c.DataKey != "" || c.AccountKey != ""
 
-	color.New(color.FgCyan, color.Bold).Printf("\n=== Submitting %d activities to RescueTime ===\n", len(summaries))
+	// Pre-filter to count eligible activities
+	eligibleCount := 0
+	for _, summary := range summaries {
+		if summary.TotalDuration >= 5*time.Minute {
+			eligibleCount++
+		}
+	}
+
+	color.New(color.FgCyan, color.Bold).Printf("\n=== Processing %d tracked activities ===\n", len(summaries))
+	if eligibleCount < len(summaries) {
+		color.Yellow("%d filtered out (<%d min duration requirement)\n", len(summaries)-eligibleCount, 5)
+	}
+	if eligibleCount == 0 {
+		color.Yellow("No activities meet submission criteria.\n")
+		return
+	}
+
 	if hasNativeCredentials {
-		color.Cyan("Native API credentials detected, will try native API first with legacy fallback\n")
+		color.Cyan("Attempting native API with legacy fallback\n")
 	} else {
-		color.Cyan("Using legacy offline time API (no native credentials found)\n")
+		color.Cyan("Using legacy offline time API\n")
 	}
 
 	successCount := 0
 	failCount := 0
+	skippedCount := 0
 	nativeSuccessCount := 0
 	legacyFallbackCount := 0
 
@@ -472,6 +489,7 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 		// RescueTime API appears to require minimum 5 minutes duration
 		if summary.TotalDuration < 5*time.Minute {
 			c.debugLog("Skipping %s: duration %v is less than 5 minutes", summary.AppClass, summary.TotalDuration)
+			skippedCount++
 			continue
 		}
 
@@ -538,20 +556,20 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 
 	color.New(color.FgCyan, color.Bold).Printf("\n=== Submission Summary ===\n")
 	if successCount > 0 {
-		color.Green("Total succeeded: %d\n", successCount)
+		color.Green("Submitted: %d\n", successCount)
 	}
 	if failCount > 0 {
-		color.Red("Total failed: %d\n", failCount)
+		color.Red("Failed: %d\n", failCount)
 	}
 	if successCount == 0 && failCount == 0 {
-		fmt.Println("No activities submitted.")
+		color.Yellow("No activities met submission criteria.\n")
 	}
-	if hasNativeCredentials {
+	if hasNativeCredentials && (nativeSuccessCount > 0 || legacyFallbackCount > 0) {
 		if nativeSuccessCount > 0 {
-			color.Cyan("Native API successes: %d\n", nativeSuccessCount)
+			color.Cyan("  Native API: %d\n", nativeSuccessCount)
 		}
 		if legacyFallbackCount > 0 {
-			color.Yellow("Legacy fallback successes: %d\n", legacyFallbackCount)
+			color.Yellow("  Legacy fallback: %d\n", legacyFallbackCount)
 		}
 	}
 }
