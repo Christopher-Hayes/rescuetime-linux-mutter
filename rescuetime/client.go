@@ -553,25 +553,6 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 			}
 		}
 	}
-
-	color.New(color.FgCyan, color.Bold).Printf("\n=== Submission Summary ===\n")
-	if successCount > 0 {
-		color.Green("Submitted: %d\n", successCount)
-	}
-	if failCount > 0 {
-		color.Red("Failed: %d\n", failCount)
-	}
-	if successCount == 0 && failCount == 0 {
-		color.Yellow("No activities met submission criteria.\n")
-	}
-	if hasNativeCredentials && (nativeSuccessCount > 0 || legacyFallbackCount > 0) {
-		if nativeSuccessCount > 0 {
-			color.Cyan("  Native API: %d\n", nativeSuccessCount)
-		}
-		if legacyFallbackCount > 0 {
-			color.Yellow("  Legacy fallback: %d\n", legacyFallbackCount)
-		}
-	}
 }
 
 // Activate authenticates with RescueTime and retrieves account keys.
