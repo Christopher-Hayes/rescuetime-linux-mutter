@@ -1,0 +1,155 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ "master" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Verify dependencies
+      run: go mod verify
+
+    - name: Run go vet
+      run: go vet ./...
+
+    - name: Run tests
+      run: go test -v -race -coverprofile=coverage.out ./...
+
+    - name: Build binaries
+      run: |
+        go build -v -o active-window ./cmd/active-window
+        go build -v -tags ignore_app -o ignoreApplication ./cmd/ignoreApplication
+
+    - name: Verify binaries
+      run: |
+        ./active-window --help || true
+        test -f active-window
+        test -f ignoreApplication
+        echo "✅ Binaries built successfully"
+
+    - name: Upload coverage to Codecov (optional)
+      uses: codecov/codecov-action@v3
+      continue-on-error: true
+      with:
+        files: ./coverage.out
+        flags: unittests
+
+  release:
+    name: Create Release
+    needs: build-and-test
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Build release binaries
+      run: |
+        # Build for Linux amd64
+        GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -o active-window-linux-amd64 ./cmd/active-window
+        GOOS=linux GOARCH=amd64 go build -v -ldflags="-s -w" -tags ignore_app -o ignoreApplication-linux-amd64 ./cmd/ignoreApplication
+        
+        # Build for Linux arm64
+        GOOS=linux GOARCH=arm64 go build -v -ldflags="-s -w" -o active-window-linux-arm64 ./cmd/active-window
+        GOOS=linux GOARCH=arm64 go build -v -ldflags="-s -w" -tags ignore_app -o ignoreApplication-linux-arm64 ./cmd/ignoreApplication
+        
+        # Create checksums
+        sha256sum active-window-linux-* ignoreApplication-linux-* > checksums.txt
+
+    - name: Extract release notes
+      id: extract-release-notes
+      run: |
+        # Try to extract release notes from CHANGELOG.md if it exists
+        if [ -f CHANGELOG.md ]; then
+          # Extract notes for this version (basic implementation)
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "Using version: $VERSION"
+        fi
+        # Default release notes
+        echo "release_notes=Release ${{ github.ref_name }}" >> $GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          active-window-linux-amd64
+          active-window-linux-arm64
+          ignoreApplication-linux-amd64
+          ignoreApplication-linux-arm64
+          checksums.txt
+        body: |
+          ## RescueTime Linux Mutter ${{ github.ref_name }}
+          
+          A native Linux activity tracker for RescueTime that monitors active windows on GNOME/Mutter.
+          
+          ### Download
+          
+          **For most users (x86_64/amd64):**
+          - `active-window-linux-amd64` - Main tracking application
+          - `ignoreApplication-linux-amd64` - Tool to manage ignored applications
+          
+          **For ARM systems (e.g., Raspberry Pi):**
+          - `active-window-linux-arm64`
+          - `ignoreApplication-linux-arm64`
+          
+          ### Installation
+          
+          ```bash
+          # Download and make executable
+          chmod +x active-window-linux-amd64
+          chmod +x ignoreApplication-linux-amd64
+          
+          # Rename (optional)
+          mv active-window-linux-amd64 active-window
+          mv ignoreApplication-linux-amd64 ignoreApplication
+          ```
+          
+          ### Quick Start
+          
+          1. Install the GNOME Shell FocusedWindow extension
+          2. Set up your RescueTime API key in `.env`
+          3. Run: `./active-window -track -submit`
+          
+          See the [README](https://github.com/${{ github.repository }}/blob/master/README.md) for detailed setup instructions.
+          
+          ### Verify Downloads
+          
+          ```bash
+          sha256sum -c checksums.txt
+          ```
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
