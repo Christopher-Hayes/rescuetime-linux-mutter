@@ -32,17 +32,23 @@ go mod download
 
 # Build the binary
 echo ""
-echo "Building binary..."
-go build -o active-window active-window.go
+echo "Building binaries..."
+go build -o active-window .
+go build -tags ignore_app -o ignoreApplication common.go ignoreApplication.go
 
-if [ -f "active-window" ]; then
+if [ -f "active-window" ] && [ -f "ignoreApplication" ]; then
     echo ""
     echo "✅ Build successful!"
+    echo ""
+    echo "Binaries created:"
+    echo "  - active-window (main tracking application)"
+    echo "  - ignoreApplication (tool to manage ignored apps)"
     echo ""
     echo "Next steps:"
     echo "1. Copy .env.example to .env and add your RescueTime API key"
     echo "2. Test with: ./active-window -monitor"
-    echo "3. See QUICKSTART.md for detailed setup instructions"
+    echo "3. Ignore apps with: ./ignoreApplication"
+    echo "4. See QUICKSTART.md for detailed setup instructions"
 else
     echo ""
     echo "❌ Build failed"

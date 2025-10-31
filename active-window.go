@@ -33,43 +33,7 @@ const (
 	baseRetryDelay    = 1 * time.Second
 	apiTimeout        = 10 * time.Second
 	maxOfflineDuration = 4 * time.Hour // RescueTime API limit for offline time
-
-	// D-Bus configuration
-	dbusDestination = "org.gnome.Shell"
-	dbusObjectPath  = "/org/gnome/shell/extensions/FocusedWindow"
-	dbusInterface   = "org.gnome.shell.extensions.FocusedWindow"
-	dbusMethod      = dbusInterface + ".Get"
 )
-
-// MutterWindow represents the window information from GNOME Shell's FocusedWindow extension
-type MutterWindow struct {
-	Title              string      `json:"title"`
-	WmClass            string      `json:"wm_class"`
-	WmClassInstance    string      `json:"wm_class_instance"`
-	Pid                int32       `json:"pid"`
-	Id                 uint64      `json:"id"`
-	Width              int32       `json:"width"`
-	Height             int32       `json:"height"`
-	X                  int32       `json:"x"`
-	Y                  int32       `json:"y"`
-	Focus              bool        `json:"focus"`
-	InCurrentWorkspace bool        `json:"in_current_workspace"`
-	Moveable           bool        `json:"moveable"`
-	Resizeable         bool        `json:"resizeable"`
-	CanClose           bool        `json:"canclose"`
-	CanMaximize        bool        `json:"canmaximize"`
-	Maximized          bool        `json:"maximized"`
-	CanMinimize        bool        `json:"canminimize"`
-	Display            interface{} `json:"display"`
-	FrameType          int32       `json:"frame_type"`
-	WindowType         int32       `json:"window_type"`
-	Layer              int32       `json:"layer"`
-	Monitor            int32       `json:"monitor"`
-	Role               string      `json:"role"`
-	Area               interface{} `json:"area"`
-	AreaAll            interface{} `json:"area_all"`
-	AreaCust           interface{} `json:"area_cust"`
-}
 
 // Global variables for configuration
 var (
@@ -123,11 +87,13 @@ type ActivitySummary struct {
 
 // ActivityTracker manages tracking of application usage sessions
 type ActivityTracker struct {
-	mu             sync.RWMutex
-	currentSession *ActivitySession
-	sessions       []ActivitySession
-	mergeThreshold time.Duration // merge sessions shorter than this threshold
-	minDuration    time.Duration // ignore sessions shorter than this
+	mu               sync.RWMutex
+	currentSession   *ActivitySession
+	sessions         []ActivitySession
+	mergeThreshold   time.Duration // merge sessions shorter than this threshold
+	minDuration      time.Duration // ignore sessions shorter than this
+	ignoredApps      map[string]bool // WmClass values to ignore
+	ignoreConfigPath string          // path to ignore list file
 }
 
 // RescueTimePayload represents the data structure for RescueTime API (legacy offline time API)
@@ -643,15 +609,111 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 
 // NewActivityTracker creates a new activity tracker with default settings
 func NewActivityTracker() *ActivityTracker {
-	return &ActivityTracker{
-		sessions:       make([]ActivitySession, 0),
-		mergeThreshold: defaultMergeThreshold,
-		minDuration:    defaultMinDuration,
+	tracker := &ActivityTracker{
+		sessions:         make([]ActivitySession, 0),
+		mergeThreshold:   defaultMergeThreshold,
+		minDuration:      defaultMinDuration,
+		ignoredApps:      make(map[string]bool),
+		ignoreConfigPath: ".rescuetime-ignore",
 	}
+	
+	// Load ignored applications from config file
+	if err := tracker.loadIgnoredApps(); err != nil {
+		debugLog("No ignore list found or error loading: %v", err)
+	}
+	
+	return tracker
+}
+
+// loadIgnoredApps loads the list of ignored applications from config file
+func (at *ActivityTracker) loadIgnoredApps() error {
+	file, err := os.Open(at.ignoreConfigPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	at.mu.Lock()
+	defer at.mu.Unlock()
+
+	at.ignoredApps = make(map[string]bool)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		at.ignoredApps[line] = true
+		debugLog("Loaded ignored application: %s", line)
+	}
+
+	if len(at.ignoredApps) > 0 {
+		verboseLog("Loaded %d ignored applications from %s", len(at.ignoredApps), at.ignoreConfigPath)
+	}
+
+	return scanner.Err()
+}
+
+// isAppIgnored checks if an application should be ignored
+func (at *ActivityTracker) isAppIgnored(appClass string) bool {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+	return at.ignoredApps[appClass]
+}
+
+// addIgnoredApp adds an application to the ignore list and saves to file
+func (at *ActivityTracker) addIgnoredApp(appClass string) error {
+	at.mu.Lock()
+	at.ignoredApps[appClass] = true
+	at.mu.Unlock()
+
+	return at.saveIgnoredApps()
+}
+
+// saveIgnoredApps saves the current ignore list to file
+func (at *ActivityTracker) saveIgnoredApps() error {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+
+	file, err := os.Create(at.ignoreConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to create ignore file: %v", err)
+	}
+	defer file.Close()
+
+	writer := bufio.NewWriter(file)
+	
+	// Write header
+	fmt.Fprintln(writer, "# RescueTime Ignored Applications")
+	fmt.Fprintln(writer, "# One WmClass per line")
+	fmt.Fprintln(writer, "# Lines starting with # are comments")
+	fmt.Fprintln(writer, "")
+
+	// Write ignored apps
+	for appClass := range at.ignoredApps {
+		fmt.Fprintln(writer, appClass)
+	}
+
+	return writer.Flush()
 }
 
 // StartSession begins tracking a new activity session
 func (at *ActivityTracker) StartSession(appClass, windowTitle string) {
+	// Check if app should be ignored
+	if at.isAppIgnored(appClass) {
+		debugLog("Ignoring application: %s", appClass)
+		
+		// End current session if exists, but don't start a new one
+		at.mu.Lock()
+		if at.currentSession != nil && at.currentSession.Active {
+			at.endCurrentSessionUnsafe(time.Now())
+		}
+		at.currentSession = nil
+		at.mu.Unlock()
+		return
+	}
+
 	at.mu.Lock()
 	defer at.mu.Unlock()
 

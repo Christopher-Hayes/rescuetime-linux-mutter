@@ -8,6 +8,7 @@ A native Linux activity tracker for [RescueTime](https://www.rescuetime.com) tha
 
 - **Mutter/GNOME Shell Support** - Monitors active window via D-Bus FocusedWindow extension
 - **Smart Session Tracking** - Automatically tracks time spent in each application
+- **Application Filtering** - Ignore specific applications to avoid double-tracking
 - **Intelligent Merging** - Merges brief window switches to the same app (< 30 seconds)
 - **Session Filtering** - Ignores very short sessions (< 10 seconds) to reduce noise
 - **Automatic Submission** - Sends activity data to RescueTime every 15 minutes (configurable)
@@ -71,11 +72,12 @@ sudo snap install go --classic
 git clone https://github.com/Christopher-Hayes/rescuetime-linux-mutter.git
 cd rescuetime-linux-mutter
 
-# Download dependencies
-go mod download
+# Build using the build script (recommended)
+./build.sh
 
-# Build the binary
-go build -o active-window active-window.go
+# This creates two binaries:
+# - active-window: Main tracking application
+# - ignoreApplication: Tool to manage ignored apps
 
 # Create environment file
 cp .env.example .env
@@ -136,6 +138,57 @@ RESCUE_TIME_API_KEY=your_api_key_here
 # With debug logging for troubleshooting
 ./active-window -track -submit -debug
 ```
+
+### Ignoring Applications
+
+To avoid double-tracking (e.g., when using RescueTime plugins for VS Code or browsers), you can ignore specific applications:
+
+**Option 1: Interactive CLI Tool (Recommended)**
+
+```bash
+# Build the ignoreApplication tool
+./build.sh
+
+# Run the interactive tool
+./ignoreApplication
+```
+
+The tool will:
+1. Monitor your active windows for 10 seconds
+2. Display a list of detected applications
+3. Let you select which one to ignore
+4. Save it to `.rescuetime-ignore`
+
+**Option 2: Manual Configuration**
+
+Create or edit `.rescuetime-ignore` in the project directory:
+
+```bash
+# .rescuetime-ignore
+# One WmClass per line
+# Lines starting with # are comments
+
+Code              # VS Code
+firefox           # Firefox browser
+Google-chrome     # Chrome browser
+```
+
+**Finding WmClass Names:**
+
+```bash
+# Option 1: Use the ignoreApplication tool (easiest)
+./ignoreApplication
+
+# Option 2: Monitor and check the output
+./active-window -monitor
+# The WmClass is shown in parentheses: "Window Title (WmClass)"
+
+# Option 3: Query current window
+./active-window
+# Output: Active Window: Title (WmClass)
+```
+
+**Note:** Changes to `.rescuetime-ignore` require restarting the tracker if it's already running.
 
 ### Command-Line Flags
 
@@ -467,6 +520,8 @@ Content-Type: application/json; charset=utf-8
 - ✅ Real-time window focus monitoring
 - ✅ Activity session tracking with start/end times
 - ✅ Session merging for brief interruptions
+- ✅ Application filtering (ignore list)
+- ✅ Interactive CLI tool for managing ignored apps
 - ✅ Activity summarization and aggregation
 - ✅ Graceful shutdown with summary display
 - ✅ RescueTime API integration (Offline Time POST)

@@ -4,6 +4,10 @@ http-client.env.json
 
 # Build artifacts
 active-window
+ignoreApplication
+
+# Runtime config
+.rescuetime-ignore
 
 # Environment and secrets
 .env

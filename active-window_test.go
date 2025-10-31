@@ -302,3 +302,86 @@ func TestFormatWindowOutput(t *testing.T) {
 		})
 	}
 }
+
+// Test ignore functionality
+func TestIsAppIgnored(t *testing.T) {
+	tracker := NewActivityTracker()
+
+	// Initially should not ignore anything
+	if tracker.isAppIgnored("firefox") {
+		t.Error("Expected firefox to not be ignored initially")
+	}
+
+	// Add firefox to ignore list
+	tracker.ignoredApps["firefox"] = true
+
+	// Now should be ignored
+	if !tracker.isAppIgnored("firefox") {
+		t.Error("Expected firefox to be ignored after adding to list")
+	}
+
+	// Other apps should not be ignored
+	if tracker.isAppIgnored("chrome") {
+		t.Error("Expected chrome to not be ignored")
+	}
+}
+
+func TestStartSessionWithIgnoredApp(t *testing.T) {
+	tracker := NewActivityTracker()
+
+	// Add Code to ignore list
+	tracker.ignoredApps["Code"] = true
+
+	// Start session with ignored app
+	tracker.StartSession("Code", "Visual Studio Code")
+
+	// Should not create a session
+	if tracker.currentSession != nil {
+		t.Error("Expected no session to be created for ignored app")
+	}
+
+	// Try with non-ignored app
+	tracker.StartSession("firefox", "Mozilla Firefox")
+
+	// Should create a session
+	if tracker.currentSession == nil {
+		t.Error("Expected session to be created for non-ignored app")
+	}
+	if tracker.currentSession.AppClass != "firefox" {
+		t.Errorf("Expected session AppClass 'firefox', got '%s'", tracker.currentSession.AppClass)
+	}
+}
+
+func TestIgnoredAppsNotInSummary(t *testing.T) {
+	tracker := NewActivityTracker()
+	
+	// Set a lower minimum duration for testing
+	tracker.minDuration = 50 * time.Millisecond
+
+	// Ignore Code
+	tracker.ignoredApps["Code"] = true
+
+	// Start and end session with ignored app
+	tracker.StartSession("Code", "Visual Studio Code")
+	time.Sleep(100 * time.Millisecond)
+	tracker.EndCurrentSession()
+
+	// Start and end session with non-ignored app
+	tracker.StartSession("firefox", "Mozilla Firefox")
+	time.Sleep(100 * time.Millisecond)
+	tracker.EndCurrentSession()
+
+	// Get summaries
+	summaries := tracker.GetActivitySummaries()
+
+	// Should only have firefox, not Code
+	if len(summaries) != 1 {
+		t.Errorf("Expected 1 summary, got %d", len(summaries))
+	}
+	if _, exists := summaries["firefox"]; !exists {
+		t.Error("Expected firefox in summaries")
+	}
+	if _, exists := summaries["Code"]; exists {
+		t.Error("Did not expect Code in summaries (it should be ignored)")
+	}
+}
