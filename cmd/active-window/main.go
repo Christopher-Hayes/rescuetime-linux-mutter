@@ -53,35 +53,41 @@ var (
 // debugLog prints debug messages if debug mode is enabled
 func debugLog(format string, args ...interface{}) {
 	if debugMode {
-		log.Printf(colorDebug("[DEBUG] "+format, args...))
+		timestamp := time.Now().Format("15:04")
+		log.Printf("%s %s", timestamp, colorDebug("[DEBUG] "+format, args...))
 	}
 }
 
 // verboseLog prints verbose messages if verbose mode is enabled
 func verboseLog(format string, args ...interface{}) {
 	if verboseMode || debugMode {
-		log.Printf(colorVerbose("[VERBOSE] "+format, args...))
+		timestamp := time.Now().Format("15:04")
+		log.Printf("%s %s", timestamp, colorVerbose("[VERBOSE] "+format, args...))
 	}
 }
 
 // infoLog prints info messages (always shown)
 func infoLog(format string, args ...interface{}) {
-	log.Printf(colorInfo("[INFO] "+format, args...))
+	timestamp := time.Now().Format("15:04")
+	log.Printf("%s %s", timestamp, colorInfo("[INFO] "+format, args...))
 }
 
 // errorLog prints error messages (always shown)
 func errorLog(format string, args ...interface{}) {
-	log.Printf(colorError("[ERROR] "+format, args...))
+	timestamp := time.Now().Format("15:04")
+	log.Printf("%s %s", timestamp, colorError("[ERROR] "+format, args...))
 }
 
 // warningLog prints warning messages (always shown)
 func warningLog(format string, args ...interface{}) {
-	log.Printf(colorWarning("[WARNING] "+format, args...))
+	timestamp := time.Now().Format("15:04")
+	log.Printf("%s %s", timestamp, colorWarning("[WARNING] "+format, args...))
 }
 
 // successLog prints success messages (always shown)
 func successLog(format string, args ...interface{}) {
-	log.Printf(colorSuccess("[SUCCESS] "+format, args...))
+	timestamp := time.Now().Format("15:04")
+	log.Printf("%s %s", timestamp, colorSuccess("[SUCCESS] "+format, args...))
 }
 
 // ActivitySession represents a single continuous session with an application
@@ -504,13 +510,25 @@ func getActiveWindowClass() (string, error) {
 	return window.WmClass, nil
 }
 
-func formatWindowOutput(windowName, windowClass string) string {
+func formatWindowOutput(tracker *ActivityTracker, windowName, windowClass string) string {
+	// Check if ignored
+	isIgnored := tracker != nil && tracker.isAppIgnored(windowClass)
+
 	if windowClass != "" {
+		// If ignored, use muted black/gray colors
+		if isIgnored {
+			return fmt.Sprintf("%s: %s %s",
+				color.HiBlackString("Active Window"),
+				color.HiBlackString("%s", windowName),
+				color.HiBlackString("(%s)", windowClass))
+		}
+
 		return fmt.Sprintf("%s: %s %s",
 			colorKey("Active Window"),
 			colorValue(windowName),
 			color.HiBlackString("(%s)", windowClass))
 	}
+
 	return fmt.Sprintf("%s: %s",
 		colorKey("Active Window"),
 		colorValue(windowName))
@@ -663,7 +681,7 @@ func getCurrentWindowInfo() (string, error) {
 	}
 
 	windowClass, _ := getActiveWindowClass()
-	return formatWindowOutput(windowName, windowClass), nil
+	return formatWindowOutput(nil, windowName, windowClass), nil
 }
 
 func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration) {
@@ -707,8 +725,8 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 		lastWindowTitle = window.Title
 
 		// Print initial window
-		currentInfo := formatWindowOutput(window.Title, window.WmClass)
-		fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
+		currentInfo := formatWindowOutput(tracker, window.Title, window.WmClass)
+		fmt.Printf("%s %s\n", time.Now().Format("15:04"), currentInfo)
 		verboseLog("Started tracking: %s", currentInfo)
 	}
 
@@ -831,8 +849,8 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 				tracker.StartSession(window.WmClass, window.Title)
 
 				// Print the change
-				currentInfo := formatWindowOutput(window.Title, window.WmClass)
-				fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
+				currentInfo := formatWindowOutput(tracker, window.Title, window.WmClass)
+				fmt.Printf("%s %s\n", time.Now().Format("15:04"), currentInfo)
 				verboseLog("Window changed to: %s (%s)", window.Title, window.WmClass)
 
 				// Update tracking variables
@@ -864,10 +882,10 @@ func main() {
 	debugMode = *debug
 	verboseMode = *verbose
 
-	// Configure logging
-	log.SetFlags(log.Ldate | log.Ltime)
+	// Configure logging - timestamp first, no seconds, no date
+	log.SetFlags(0) // Disable default flags, we'll add custom timestamp
+	log.SetPrefix("")
 	if debugMode {
-		log.SetPrefix("[rescuetime] ")
 		debugLog("Debug mode enabled")
 	}
 
