@@ -6,6 +6,12 @@ const (
 	dbusObjectPath  = "/org/gnome/shell/extensions/FocusedWindow"
 	dbusInterface   = "org.gnome.shell.extensions.FocusedWindow"
 	dbusMethod      = dbusInterface + ".Get"
+	
+	// Mutter idle monitor D-Bus configuration
+	idleMonitorDestination = "org.gnome.Mutter.IdleMonitor"
+	idleMonitorObjectPath  = "/org/gnome/Mutter/IdleMonitor/Core"
+	idleMonitorInterface   = "org.gnome.Mutter.IdleMonitor"
+	idleMonitorMethod      = idleMonitorInterface + ".GetIdletime"
 )
 
 // MutterWindow represents the window information from GNOME Shell's FocusedWindow extension

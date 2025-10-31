@@ -27,6 +27,9 @@ const (
 	defaultMinDuration    = 10 * time.Second // Ignore sessions shorter than this
 	defaultPollInterval   = 1000 * time.Millisecond
 	defaultSubmitInterval = 15 * time.Minute
+	
+	// Idle detection
+	defaultIdleThreshold = 5 * time.Minute // Consider user idle after 5 minutes of inactivity
 
 	// API retry configuration
 	maxAPIRetries     = 3
@@ -909,6 +912,38 @@ func getActiveWindow() (*MutterWindow, error) {
 	return &window, nil
 }
 
+// getIdleTime queries Mutter's IdleMonitor to get user idle time in milliseconds
+func getIdleTime() (time.Duration, error) {
+	// Connect to session bus
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return 0, fmt.Errorf("failed to connect to session bus: %v", err)
+	}
+	defer conn.Close()
+
+	debugLog("Querying idle time from Mutter IdleMonitor")
+
+	// Call the IdleMonitor GetIdletime method
+	obj := conn.Object(idleMonitorDestination, dbus.ObjectPath(idleMonitorObjectPath))
+	call := obj.Call(idleMonitorMethod, 0)
+	
+	if call.Err != nil {
+		return 0, fmt.Errorf("failed to call IdleMonitor.GetIdletime: %v\n\nTroubleshooting:\n  1. Verify you're running GNOME/Mutter\n  2. Test D-Bus manually: gdbus call --session --dest org.gnome.Mutter.IdleMonitor --object-path /org/gnome/Mutter/IdleMonitor/Core --method org.gnome.Mutter.IdleMonitor.GetIdletime", call.Err)
+	}
+
+	// The response is an unsigned 64-bit integer representing idle time in milliseconds
+	var idleMs uint64
+	err = call.Store(&idleMs)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse IdleMonitor response: %v", err)
+	}
+
+	idleDuration := time.Duration(idleMs) * time.Millisecond
+	debugLog("Current idle time: %v (%d ms)", idleDuration, idleMs)
+
+	return idleDuration, nil
+}
+
 func getActiveWindowName() (string, error) {
 	window, err := getActiveWindow()
 	if err != nil {
@@ -1104,7 +1139,7 @@ func getCurrentWindowInfo() (string, error) {
 	return formatWindowOutput(windowName, windowClass), nil
 }
 
-func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool) {
+func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration) {
 	// Add panic recovery to prevent crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -1114,6 +1149,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 	}()
 
 	var lastAppClass, lastWindowTitle string
+	var wasIdle bool
 
 	// Create activity tracker
 	tracker := NewActivityTracker()
@@ -1129,15 +1165,25 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 		return
 	}
 
-	// Start the initial session
-	tracker.StartSession(window.WmClass, window.Title)
-	lastAppClass = window.WmClass
-	lastWindowTitle = window.Title
+	// Check initial idle state
+	idleTime, err := getIdleTime()
+	if err != nil {
+		errorLog("Error getting initial idle time: %v", err)
+		// Continue anyway, will retry on next poll
+	} else if idleTime >= idleThreshold {
+		wasIdle = true
+		verboseLog("User is currently idle (%v), not starting tracking yet", idleTime)
+	} else {
+		// Start the initial session only if not idle
+		tracker.StartSession(window.WmClass, window.Title)
+		lastAppClass = window.WmClass
+		lastWindowTitle = window.Title
 
-	// Print initial window
-	currentInfo := formatWindowOutput(window.Title, window.WmClass)
-	fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
-	verboseLog("Started tracking: %s", currentInfo)
+		// Print initial window
+		currentInfo := formatWindowOutput(window.Title, window.WmClass)
+		fmt.Printf("%s [%s]\n", currentInfo, time.Now().Format("15:04:05"))
+		verboseLog("Started tracking: %s", currentInfo)
+	}
 
 	pollTicker := time.NewTicker(interval)
 	defer pollTicker.Stop()
@@ -1217,6 +1263,34 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			tracker.ClearCompletedSessions()
 
 		case <-pollTicker.C:
+			// Check idle status first
+			idleTime, err := getIdleTime()
+			if err != nil {
+				debugLog("Error getting idle time: %v", err)
+				// Continue with window tracking even if idle detection fails
+			} else {
+				isIdle := idleTime >= idleThreshold
+				
+				// Handle idle state transitions
+				if isIdle && !wasIdle {
+					// User just became idle - end current session
+					verboseLog("User went idle (idle for %v), pausing tracking", idleTime)
+					tracker.EndCurrentSession()
+					wasIdle = true
+					continue // Skip window tracking while idle
+				} else if !isIdle && wasIdle {
+					// User returned from idle - resume tracking
+					verboseLog("User returned from idle (idle time: %v), resuming tracking", idleTime)
+					wasIdle = false
+					// Will start new session below if window info is available
+				} else if isIdle {
+					// Still idle - skip this iteration
+					debugLog("User still idle (%v), skipping window poll", idleTime)
+					continue
+				}
+				// If not idle and wasn't idle, continue normal tracking below
+			}
+
 			window, err := getActiveWindow()
 			if err != nil {
 				// Don't spam errors, just skip this iteration
@@ -1253,6 +1327,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	interval := flag.Duration("interval", defaultPollInterval, "Polling interval for monitoring mode (e.g., 100ms, 1s)")
 	submissionInterval := flag.Duration("submission-interval", defaultSubmitInterval, "Interval for submitting data to RescueTime (e.g., 15m, 1h)")
+	idleThreshold := flag.Duration("idle-threshold", defaultIdleThreshold, "Consider user idle after this duration of inactivity (e.g., 5m, 10m)")
 	flag.Parse()
 
 	// Set global debug/verbose flags
@@ -1287,6 +1362,15 @@ func main() {
 			os.Exit(1)
 		}
 		verboseLog("Successfully connected to FocusedWindow D-Bus extension")
+		
+		// Verify idle monitor is available
+		_, err = getIdleTime()
+		if err != nil {
+			errorLog("Warning: Failed to connect to Mutter IdleMonitor: %v", err)
+			errorLog("Idle detection will be disabled. Make sure you're running GNOME/Mutter.")
+		} else {
+			verboseLog("Successfully connected to Mutter IdleMonitor (idle threshold: %v)", *idleThreshold)
+		}
 	}
 
 	if *monitor || *track {
@@ -1321,7 +1405,7 @@ func main() {
 			}
 
 			// Call with API submission enabled
-			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile)
+			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile, *idleThreshold)
 		} else {
 			// Validate basic configuration even without API submission
 			if err := validateConfiguration(false, false, "", *submissionInterval, *interval); err != nil {
@@ -1329,7 +1413,7 @@ func main() {
 				os.Exit(1)
 			}
 			// Call without API submission
-			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile)
+			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile, *idleThreshold)
 		}
 	} else {
 		// Single execution mode

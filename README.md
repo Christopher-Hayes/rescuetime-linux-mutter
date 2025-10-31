@@ -7,6 +7,7 @@ A native Linux activity tracker for [RescueTime](https://www.rescuetime.com) tha
 ## Features
 
 - **Mutter/GNOME Shell Support** - Monitors active window via D-Bus FocusedWindow extension
+- **Idle Detection** - Automatically pauses tracking when you're away from your computer
 - **Smart Session Tracking** - Automatically tracks time spent in each application
 - **Application Filtering** - Ignore specific applications to avoid double-tracking
 - **Intelligent Merging** - Merges brief window switches to the same app (< 30 seconds)
@@ -135,6 +136,9 @@ RESCUE_TIME_API_KEY=your_api_key_here
 # Custom submission interval (default: 15m)
 ./active-window -track -submit -submission-interval 5m
 
+# Custom idle threshold (default: 5m)
+./active-window -track -submit -idle-threshold 10m
+
 # With debug logging for troubleshooting
 ./active-window -track -submit -debug
 ```
@@ -190,6 +194,48 @@ Google-chrome     # Chrome browser
 
 **Note:** Changes to `.rescuetime-ignore` require restarting the tracker if it's already running.
 
+### Idle Detection
+
+The application automatically detects when you're away from your computer and pauses tracking:
+
+**How it works:**
+- Uses GNOME/Mutter's idle monitor via D-Bus to track keyboard/mouse inactivity
+- Default idle threshold: 5 minutes (configurable via `-idle-threshold` flag)
+- When you become idle, the current session is ended
+- Tracking automatically resumes when you return
+
+**Customizing idle detection:**
+
+```bash
+# Set idle threshold to 10 minutes
+./active-window -track -submit -idle-threshold 10m
+
+# Set idle threshold to 2 minutes
+./active-window -track -submit -idle-threshold 2m
+
+# View idle state changes with verbose logging
+./active-window -track -submit -idle-threshold 5m -verbose
+```
+
+**Troubleshooting idle detection:**
+
+If idle detection isn't working:
+
+1. Verify Mutter's IdleMonitor is available:
+   ```bash
+   gdbus call --session --dest org.gnome.Mutter.IdleMonitor \
+     --object-path /org/gnome/Mutter/IdleMonitor/Core \
+     --method org.gnome.Mutter.IdleMonitor.GetIdletime
+   ```
+   This should return your current idle time in milliseconds.
+
+2. The application will show a warning at startup if idle detection is unavailable but will continue tracking without it.
+
+3. Use verbose logging to see idle state changes:
+   ```bash
+   ./active-window -track -verbose
+   ```
+
 ### Command-Line Flags
 
 | Flag | Description | Default |
@@ -203,6 +249,7 @@ Google-chrome     # Chrome browser
 | `-verbose` | Enable verbose logging | `false` |
 | `-interval` | Polling interval for window detection | `1000ms` |
 | `-submission-interval` | How often to submit data to RescueTime | `15m` |
+| `-idle-threshold` | Time of inactivity before considering user idle | `5m` |
 
 ### Running as a Service
 

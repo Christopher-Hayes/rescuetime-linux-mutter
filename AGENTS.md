@@ -30,14 +30,18 @@ cat rescuetime-sessions.json | jq .
 
 ### Core Communication Pattern: D-Bus Extension Bridge
 - **Critical dependency**: GNOME Shell FocusedWindow extension (`org.gnome.Shell.extensions.FocusedWindow`)
+- **Idle detection**: Mutter IdleMonitor (`org.gnome.Mutter.IdleMonitor`)
 - **Why D-Bus**: Wayland security model prevents direct window inspection; GNOME Shell extension has privileged access
 - **Connection flow**: 
   ```
   Go app → D-Bus session bus → GNOME Shell → Extension → Window metadata (JSON)
      ↓         1000ms poll          ↓             ↓              ↓
   Parse JSON ← D-Bus response ← Extension ← Wayland compositor
+  
+  Go app → D-Bus session bus → Mutter IdleMonitor → User idle time (ms)
   ```
 - **Detection method**: Polling at 1000ms intervals (not event-driven due to D-Bus limitations)
+- **Idle detection**: Queries idle time every poll cycle, pauses tracking when user is idle (default: 5 minutes)
 - **Performance impact**: <1% CPU, ~10MB RAM (polling is lightweight, D-Bus handles multiplexing)
 
 ### Activity Tracking State Machine
@@ -54,19 +58,26 @@ Window Focus Change Detected (WmClass changes)
     Start new session
          ↓
     Continue polling...
+    
+Idle State Change Detected
+    ├─ User became idle → End current session, pause tracking
+    └─ User returned from idle → Resume tracking with new session
 ```
 
 **State transitions**:
 1. **Window changes** → End current session → Start new session
 2. **Session merging**: Gaps <30s to same app are merged (handles Alt+Tab, brief app switches)
 3. **Filtering**: Sessions <10s are discarded as noise (prevents spam from window-hopping)
-4. **Thread safety**: `sync.RWMutex` protects `ActivityTracker` state (read-heavy workload, rare writes)
-5. **Graceful shutdown**: SIGINT/SIGTERM triggers final session end + API submission (no data loss)
+4. **Idle detection**: User inactivity >5m (configurable) → End session, pause tracking
+5. **Return from idle**: User activity detected → Resume tracking
+6. **Thread safety**: `sync.RWMutex` protects `ActivityTracker` state (read-heavy workload, rare writes)
+7. **Graceful shutdown**: SIGINT/SIGTERM triggers final session end + API submission (no data loss)
 
 **Why these thresholds?**
 - 30s merge: Users often switch windows briefly then return (checking docs, alt-tab)
 - 10s minimum: Accidental window activations, passing through apps
 - 1000ms poll: Balance between responsiveness and CPU usage
+- 5m idle: Standard threshold for "away from keyboard", matches RescueTime's own client behavior
 
 ### Dual API Strategy (Legacy + Native)
 ```go
@@ -123,6 +134,7 @@ const (
     defaultMergeThreshold = 30 * time.Second
     defaultMinDuration    = 10 * time.Second
     defaultPollInterval   = 200 * time.Millisecond
+    defaultIdleThreshold  = 5 * time.Minute  // Idle detection threshold
     maxAPIRetries         = 3
     baseRetryDelay        = 1 * time.Second
     maxOfflineDuration    = 4 * time.Hour  // RescueTime API limit
@@ -196,7 +208,8 @@ errorLog()   // Always: API failures, setup errors
 
 ## Key Files & Their Roles
 
-- **`active-window.go`**: Monolithic implementation (900+ lines) - data structures, D-Bus client, API client, tracking logic, main loop
+- **`active-window.go`**: Monolithic implementation (1000+ lines) - data structures, D-Bus client (window & idle detection), API client, tracking logic, main loop
+- **`common.go`**: Shared D-Bus configuration and data structures (FocusedWindow extension + IdleMonitor)
 - **`build.sh`**: Dependency check + `go build` wrapper with user-friendly error messages
 - **`verify-setup.sh`**: Pre-flight validation (GNOME version, D-Bus connectivity, extension status)
 - **`docs/api-docs.md`**: Official RescueTime API documentation (copy from web for offline reference)
@@ -237,6 +250,7 @@ errorLog()   // Always: API failures, setup errors
 - **Merge threshold**: Change `ActivityTracker.mergeThreshold` (default 30s)
 - **Minimum duration**: Change `ActivityTracker.minDuration` (default 10s)
 - **Submission interval**: Use `-submission-interval` flag (default 15m)
+- **Idle threshold**: Use `-idle-threshold` flag (default 5m)
 - **Thread safety**: Always use `at.mu.Lock()` when modifying tracker state
 
 ### Testing Window Detection Changes
@@ -251,6 +265,11 @@ errorLog()   // Always: API failures, setup errors
 gdbus call --session --dest org.gnome.Shell \
   --object-path /org/gnome/shell/extensions/FocusedWindow \
   --method org.gnome.shell.extensions.FocusedWindow.Get
+
+# Test idle detection
+gdbus call --session --dest org.gnome.Mutter.IdleMonitor \
+  --object-path /org/gnome/Mutter/IdleMonitor/Core \
+  --method org.gnome.Mutter.IdleMonitor.GetIdletime
 ```
 
 ## Future Work Context
