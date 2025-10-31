@@ -1,6 +1,6 @@
-# RescueTime Linux Activity Tracker (Mutter + GNOME Shell)
+# Linux application tracking for RescueTime (Wayland + Mutter)
 
-A native Linux activity tracker for [RescueTime](https://www.rescuetime.com) that monitors active window usage on GNOME/Mutter (Wayland) and submits time tracking data via the RescueTime API.
+A Go CLI client for sending application usage to [RescueTime](https://www.rescuetime.com). This client is built specifically for GNOME + Wayland (via Mutter). It's designed to be an alternative to the official Linux client, which struggles on Wayland.
 
 > **Fork Notice:** This is a fork adapted for Mutter/GNOME Shell. The original project was designed for Hyprland. This version uses D-Bus to communicate with a GNOME Shell extension for window tracking.
 
