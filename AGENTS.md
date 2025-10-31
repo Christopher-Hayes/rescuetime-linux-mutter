@@ -191,12 +191,15 @@ UserClientEvent    // API format (native: RFC3339, start+end times)
 
 ### Logging Levels (Custom Implementation)
 ```go
-debugLog()   // -debug flag: D-Bus responses, state transitions
-verboseLog() // -verbose flag: Window changes, API attempts
-infoLog()    // Always: Tracking started, submission summary
-errorLog()   // Always: API failures, setup errors
+debugLog()    // -debug flag: D-Bus responses, state transitions (cyan)
+verboseLog()  // -verbose flag: Window changes, API attempts (blue)
+infoLog()     // Always: Tracking started, submission summary (green)
+errorLog()    // Always: API failures, setup errors (red, bold)
+warningLog()  // Always: Non-fatal issues, fallbacks (yellow)
+successLog()  // Always: Successful operations (green, bold)
 ```
 **Pattern**: Use specific log functions, not generic `log.Printf()` - enables filtering by flag
+**Color library**: Uses `github.com/fatih/color` for terminal colors (similar to Chalk in Node.js)
 
 ### Error Handling Strategy
 - **D-Bus failures**: Retry on next poll (1000ms), log once with `debugLog()` to avoid spam

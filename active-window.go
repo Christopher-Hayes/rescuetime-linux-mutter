@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/fatih/color"
 	"github.com/godbus/dbus/v5"
 )
 
@@ -42,30 +43,50 @@ const (
 var (
 	debugMode   bool
 	verboseMode bool
+	
+	// Color functions for different log levels
+	colorDebug   = color.New(color.FgCyan).SprintfFunc()
+	colorVerbose = color.New(color.FgBlue).SprintfFunc()
+	colorInfo    = color.New(color.FgGreen).SprintfFunc()
+	colorError   = color.New(color.FgRed, color.Bold).SprintfFunc()
+	colorWarning = color.New(color.FgYellow).SprintfFunc()
+	colorSuccess = color.New(color.FgGreen, color.Bold).SprintfFunc()
+	colorKey     = color.New(color.FgMagenta).SprintfFunc()
+	colorValue   = color.New(color.FgWhite, color.Bold).SprintfFunc()
 )
 
 // debugLog prints debug messages if debug mode is enabled
 func debugLog(format string, args ...interface{}) {
 	if debugMode {
-		log.Printf("[DEBUG] "+format, args...)
+		log.Printf(colorDebug("[DEBUG] "+format, args...))
 	}
 }
 
 // verboseLog prints verbose messages if verbose mode is enabled
 func verboseLog(format string, args ...interface{}) {
 	if verboseMode || debugMode {
-		log.Printf("[VERBOSE] "+format, args...)
+		log.Printf(colorVerbose("[VERBOSE] "+format, args...))
 	}
 }
 
 // infoLog prints info messages (always shown)
 func infoLog(format string, args ...interface{}) {
-	log.Printf("[INFO] "+format, args...)
+	log.Printf(colorInfo("[INFO] "+format, args...))
 }
 
 // errorLog prints error messages (always shown)
 func errorLog(format string, args ...interface{}) {
-	log.Printf("[ERROR] "+format, args...)
+	log.Printf(colorError("[ERROR] "+format, args...))
+}
+
+// warningLog prints warning messages (always shown)
+func warningLog(format string, args ...interface{}) {
+	log.Printf(colorWarning("[WARNING] "+format, args...))
+}
+
+// successLog prints success messages (always shown)
+func successLog(format string, args ...interface{}) {
+	log.Printf(colorSuccess("[SUCCESS] "+format, args...))
 }
 
 // ActivitySession represents a single continuous session with an application
@@ -340,7 +361,7 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
 			delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt-1)))
-			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxAPIRetries)
+			color.Yellow("Retrying in %v... (attempt %d/%d)", delay, attempt+1, maxAPIRetries)
 			time.Sleep(delay)
 		}
 
@@ -384,21 +405,19 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 
 		// Read response body
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+	resp.Body.Close()
 
-		debugLog("Response status: %d", resp.StatusCode)
-		debugLog("Response headers: %v", resp.Header)
-		debugLog("Response body: %s", string(body))
+	debugLog("Response status: %d", resp.StatusCode)
+	debugLog("Response headers: %v", resp.Header)
+	debugLog("Response body: %s", string(body))
 
-		// Check response status
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			fmt.Printf("✓ Submitted to RescueTime: %s (%d min)\n", payload.ActivityName, payload.Duration)
-			return nil
-		}
+	// Check response status
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		successLog("Submitted to RescueTime: %s (%d min)", payload.ActivityName, payload.Duration)
+		return nil
+	}
 
-		lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
-
-		// Don't retry on client errors (4xx)
+	lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))		// Don't retry on client errors (4xx)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return lastErr
 		}
@@ -416,7 +435,7 @@ func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error 
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
 			delay := baseRetryDelay * time.Duration(math.Pow(2, float64(attempt-1)))
-			fmt.Printf("Retrying in %v... (attempt %d/%d)\n", delay, attempt+1, maxAPIRetries)
+			color.Yellow("Retrying in %v... (attempt %d/%d)", delay, attempt+1, maxAPIRetries)
 			time.Sleep(delay)
 		}
 
@@ -478,32 +497,30 @@ func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error 
 
 		// Read response body
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+	resp.Body.Close()
 
-		// Check response status
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			authMethod := "query parameter"
-			if tryBearerAuth {
-				authMethod = "Bearer token"
-			}
-			fmt.Printf("✓ Submitted to RescueTime via %s: %s (%s to %s)\n",
-				authMethod,
-				payload.UserClientEvent.Application,
-				payload.UserClientEvent.StartTime,
-				payload.UserClientEvent.EndTime)
-			return nil
+	// Check response status
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		authMethod := "query parameter"
+		if tryBearerAuth {
+			authMethod = "Bearer token"
 		}
+		successLog("Submitted to RescueTime via %s: %s (%s to %s)",
+			authMethod,
+			payload.UserClientEvent.Application,
+			payload.UserClientEvent.StartTime,
+			payload.UserClientEvent.EndTime)
+		return nil
+	}
 
-		lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	lastErr = fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
 
-		// If we got 401 with query param auth, try Bearer token auth next
-		if resp.StatusCode == 401 && !tryBearerAuth {
-			fmt.Println("Query parameter auth failed (401), trying Bearer token authentication...")
-			tryBearerAuth = true
-			continue
-		}
-
-		// Don't retry on other client errors (4xx)
+	// If we got 401 with query param auth, try Bearer token auth next
+	if resp.StatusCode == 401 && !tryBearerAuth {
+		warningLog("Query parameter auth failed (401), trying Bearer token authentication...")
+		tryBearerAuth = true
+		continue
+	}		// Don't retry on other client errors (4xx)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return lastErr
 		}
@@ -517,7 +534,7 @@ func submitUserClientEvent(apiKey string, payload UserClientEventPayload) error 
 // falls back to offline_time_post API if native fails or credentials are missing.
 func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
-		fmt.Println("No activities to submit.")
+		color.Yellow("No activities to submit.")
 		return
 	}
 
@@ -526,11 +543,11 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 	accountKey := os.Getenv("RESCUE_TIME_ACCOUNT_KEY")
 	hasNativeCredentials := dataKey != "" || accountKey != ""
 
-	fmt.Printf("\n=== Submitting %d activities to RescueTime ===\n", len(summaries))
+	color.New(color.FgCyan, color.Bold).Printf("\n=== Submitting %d activities to RescueTime ===\n", len(summaries))
 	if hasNativeCredentials {
-		fmt.Println("[INFO] Native API credentials detected, will try native API first with legacy fallback")
+		infoLog("Native API credentials detected, will try native API first with legacy fallback")
 	} else {
-		fmt.Println("[INFO] Using legacy offline time API (no native credentials found)")
+		infoLog("Using legacy offline time API (no native credentials found)")
 	}
 
 	successCount := 0
@@ -550,20 +567,20 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 
 		if hasNativeCredentials {
 			// Try native API first
-			fmt.Printf("[ATTEMPT] Trying native API for %s...\n", summary.AppClass)
+			color.Cyan("[ATTEMPT] Trying native API for %s...", summary.AppClass)
 			payload := summaryToUserClientEvent(summary)
 			err = submitUserClientEvent(apiKey, payload)
 
 			if err != nil {
 				// Native API failed, log and try legacy fallback
-				fmt.Fprintf(os.Stderr, "[WARN] Native API failed for %s: %v\n", summary.AppClass, err)
-				fmt.Printf("[FALLBACK] Attempting legacy API for %s...\n", summary.AppClass)
+				warningLog("Native API failed for %s: %v", summary.AppClass, err)
+				color.Yellow("[FALLBACK] Attempting legacy API for %s...", summary.AppClass)
 
 				legacyPayload := summaryToPayload(summary)
 				
 				// Print the payload we're about to send
 				payloadJSON, _ := json.MarshalIndent(legacyPayload, "", "  ")
-				fmt.Printf("[DEBUG] Legacy payload for %s:\n%s\n", summary.AppClass, string(payloadJSON))
+				debugLog("Legacy payload for %s:\n%s", summary.AppClass, string(payloadJSON))
 				
 				// Validate before submitting
 				if validateErr := validatePayload(legacyPayload); validateErr != nil {
@@ -581,7 +598,7 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 			
 			// Print the payload we're about to send
 			payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
-			fmt.Printf("[DEBUG] Submitting payload for %s:\n%s\n", summary.AppClass, string(payloadJSON))
+			debugLog("Submitting payload for %s:\n%s", summary.AppClass, string(payloadJSON))
 			
 			// Validate before submitting
 			if validateErr := validatePayload(payload); validateErr != nil {
@@ -592,7 +609,7 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 		}
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "✗ Failed to submit %s: %v\n", summary.AppClass, err)
+			color.Red("✗ Failed to submit %s: %v", summary.AppClass, err)
 			failCount++
 		} else {
 			successCount++
@@ -602,11 +619,27 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 		}
 	}
 
-	fmt.Printf("\n=== Submission Summary ===\n")
-	fmt.Printf("Total succeeded: %d, failed: %d\n", successCount, failCount)
+	color.New(color.FgCyan, color.Bold).Printf("\n=== Submission Summary ===\n")
+	if successCount > 0 {
+		color.Green("Total succeeded: %d", successCount)
+	}
+	if failCount > 0 {
+		color.Red(", failed: %d", failCount)
+	}
+	if successCount == 0 && failCount == 0 {
+		fmt.Println("No activities submitted.")
+	} else {
+		fmt.Println()
+	}
 	if hasNativeCredentials {
-		fmt.Printf("Native API successes: %d\n", nativeSuccessCount)
-		fmt.Printf("Legacy fallback successes: %d\n", legacyFallbackCount)
+		if nativeSuccessCount > 0 {
+			color.Cyan("Native API successes: %d", nativeSuccessCount)
+			fmt.Println()
+		}
+		if legacyFallbackCount > 0 {
+			color.Yellow("Legacy fallback successes: %d", legacyFallbackCount)
+			fmt.Println()
+		}
 	}
 }
 
@@ -962,9 +995,14 @@ func getActiveWindowClass() (string, error) {
 
 func formatWindowOutput(windowName, windowClass string) string {
 	if windowClass != "" {
-		return fmt.Sprintf("Active Window: %s (%s)", windowName, windowClass)
+		return fmt.Sprintf("%s: %s %s",
+			colorKey("Active Window"),
+			colorValue(windowName),
+			color.HiBlackString("(%s)", windowClass))
 	}
-	return fmt.Sprintf("Active Window: %s", windowName)
+	return fmt.Sprintf("%s: %s",
+		colorKey("Active Window"),
+		colorValue(windowName))
 }
 
 // validateConfiguration checks critical configuration before starting
@@ -1025,11 +1063,11 @@ func validatePayload(payload RescueTimePayload) error {
 // previewSubmission shows what would be submitted in dry-run mode
 func previewSubmission(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
-		fmt.Println("No activities to preview.")
+		color.Yellow("No activities to preview.")
 		return
 	}
 
-	fmt.Printf("\n=== DRY-RUN: Would submit %d activities ===\n", len(summaries))
+	color.New(color.FgMagenta, color.Bold).Printf("\n=== DRY-RUN: Would submit %d activities ===\n", len(summaries))
 	
 	for _, summary := range summaries {
 		// Skip activities with very short duration (< 1 minute)
@@ -1048,10 +1086,11 @@ func previewSubmission(summaries map[string]ActivitySummary) {
 		
 		jsonData, _ := json.MarshalIndent(payload, "", "  ")
 		
-		fmt.Printf("\n[PREVIEW] Would submit:\n%s\n", string(jsonData))
+		color.Cyan("\n[PREVIEW] Would submit:")
+		fmt.Printf("\n%s\n", string(jsonData))
 	}
 	
-	fmt.Println("\n=== End of preview ===")
+	color.New(color.FgMagenta, color.Bold).Println("\n=== End of preview ===")
 }
 
 // saveSummariesToFile saves activity summaries to a JSON file
@@ -1103,11 +1142,11 @@ func saveSummariesToFile(filepath string, summaries map[string]ActivitySummary) 
 
 // printActivitySummary prints a summary of tracked activities
 func printActivitySummary(tracker *ActivityTracker) {
-	fmt.Println("\n=== Activity Summary ===")
+	color.New(color.FgCyan, color.Bold).Println("\n=== Activity Summary ===")
 
 	summaries := tracker.GetActivitySummaries()
 	if len(summaries) == 0 {
-		fmt.Println("No activities tracked.")
+		color.Yellow("No activities tracked.")
 		return
 	}
 
@@ -1116,16 +1155,15 @@ func printActivitySummary(tracker *ActivityTracker) {
 		totalTime += summary.TotalDuration
 	}
 
-	fmt.Printf("Total tracking time: %v\n\n", totalTime.Round(time.Second))
+	color.New(color.FgWhite, color.Bold).Printf("Total tracking time: %v\n\n", totalTime.Round(time.Second))
 
 	for appClass, summary := range summaries {
 		percentage := float64(summary.TotalDuration) / float64(totalTime) * 100
-		fmt.Printf("%s: %v (%.1f%%) - %d sessions\n",
-			appClass,
-			summary.TotalDuration.Round(time.Second),
-			percentage,
-			summary.SessionCount)
-		fmt.Printf("  └─ %s\n\n", summary.ActivityDetails)
+		color.New(color.FgGreen, color.Bold).Printf("%s: ", appClass)
+		fmt.Printf("%v ", summary.TotalDuration.Round(time.Second))
+		color.Cyan("(%.1f%%) ", percentage)
+		color.New(color.FgWhite).Printf("- %d sessions\n", summary.SessionCount)
+		color.New(color.FgHiBlack).Printf("  └─ %s\n\n", summary.ActivityDetails)
 	}
 }
 
@@ -1206,7 +1244,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 	for {
 		select {
 		case <-sigChan:
-			fmt.Println("\nShutting down window monitor...")
+			color.Yellow("\nShutting down window monitor...")
 			infoLog("Received shutdown signal")
 
 			// End the current session

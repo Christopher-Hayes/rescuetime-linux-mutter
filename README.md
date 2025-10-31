@@ -15,6 +15,7 @@ A native Linux activity tracker for [RescueTime](https://www.rescuetime.com) tha
 - **Automatic Submission** - Sends activity data to RescueTime every 15 minutes (configurable)
 - **Graceful Shutdown** - Submits final data on exit (SIGINT/SIGTERM)
 - **Retry Logic** - Exponential backoff for failed API submissions
+- **Colored Output** - Color-coded terminal output for better readability (debug, info, warnings, errors)
 - **Debug Mode** - Extensive logging for troubleshooting (`-debug` flag)
 - **Dry-Run Mode** - Test without making API calls (`-dry-run` flag)
 - **Local Persistence** - Save sessions to JSON file (`-save` flag)
