@@ -264,8 +264,9 @@ func TestSummaryToUserClientEvent(t *testing.T) {
 	if event.UserClientEvent.WindowTitle != "main.go" {
 		t.Errorf("WindowTitle = %s, want main.go", event.UserClientEvent.WindowTitle)
 	}
-	if event.UserClientEvent.EventDescription != "code" {
-		t.Errorf("EventDescription = %s, want code", event.UserClientEvent.EventDescription)
+	// EventDescription is intentionally left empty to reduce redundancy (Application field contains the app name)
+	if event.UserClientEvent.EventDescription != "" {
+		t.Errorf("EventDescription = %s, want empty string", event.UserClientEvent.EventDescription)
 	}
 }
 
