@@ -120,8 +120,28 @@ Authorization: Bearer {data_key}
 RESCUE_TIME_API_KEY=xxx        # Legacy API
 RESCUE_TIME_ACCOUNT_KEY=xxx    # Native API (32-char hex)
 RESCUE_TIME_DATA_KEY=xxx       # Native API (44-char base64)
+POSTGRES_CONNECTION_STRING=xxx # Optional PostgreSQL storage
 ```
 **Loading**: `loadEnvFile(".env")` reads key=value pairs, sets `os.Setenv()`
+
+### PostgreSQL Storage Module (Optional)
+**Purpose**: Local database storage of activity data alongside RescueTime submission
+**Architecture**: Separate package `postgres/` following same pattern as `rescuetime/` package
+- **Type compatibility**: Uses `type ActivitySummary = rescuetime.ActivitySummary` for consistency
+- **Schema auto-creation**: Tables and indexes created on first connection
+- **Dual submission**: Activity data sent to both RescueTime API and PostgreSQL (if enabled)
+- **Validation**: Same validation rules as RescueTime API (duration, timestamps, etc.)
+- **Error handling**: PostgreSQL failures don't block RescueTime submissions
+
+**Tables**:
+- `activity_sessions`: Individual continuous sessions (start/end time, app, window title)
+- `activity_summaries`: Aggregated summaries (matches RescueTime submission data)
+
+**Use cases**:
+- Own your data - local backup of all tracking data
+- Custom analytics - SQL queries on your activity patterns
+- Privacy - keep sensitive work data on own infrastructure
+- Offline operation - continue tracking when RescueTime API is unreachable
 
 ## Code Conventions & Best Practices
 
@@ -215,6 +235,7 @@ successLog()  // Always: Successful operations (green, bold)
 - **`cmd/ignoreApplication/main.go`**: Interactive tool to manage ignored applications
 - **`internal/common/dbus.go`**: Shared D-Bus configuration and data structures (FocusedWindow extension + IdleMonitor)
 - **`rescuetime/client.go`**: RescueTime API client package
+- **`postgres/client.go`**: PostgreSQL storage module (optional - stores activity data locally)
 
 **Scripts & verification:**
 - **`scripts/build.sh`**: Dependency check + `go build` wrapper with user-friendly error messages
@@ -222,6 +243,8 @@ successLog()  // Always: Successful operations (green, bold)
 
 **Tests & documentation:**
 - **`rescuetime/example_test.go`**: Example/integration test for API client
+- **`postgres/client_test.go`**: Unit tests for PostgreSQL module
+- **`postgres/README.md`**: PostgreSQL setup guide and usage examples
 - **`docs/api-docs.md`**: Official RescueTime API documentation (copy from web for offline reference)
 - **`docs/TESTING.md`**: Testing guidelines
 

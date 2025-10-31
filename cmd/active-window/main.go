@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Christopher-Hayes/rescuetime-linux-mutter/internal/common"
+	"github.com/Christopher-Hayes/rescuetime-linux-mutter/postgres"
 	"github.com/Christopher-Hayes/rescuetime-linux-mutter/rescuetime"
 	"github.com/fatih/color"
 	"github.com/godbus/dbus/v5"
@@ -158,6 +159,19 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 	
 	// Delegate to the rescuetime package
 	client.SubmitActivities(summaries)
+}
+
+// submitActivitiesToPostgres submits all activity summaries to PostgreSQL database
+func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[string]ActivitySummary) {
+	if postgresClient == nil {
+		return
+	}
+	
+	// Set debug mode to match global setting
+	postgresClient.DebugMode = debugMode
+	
+	// Delegate to the postgres package
+	postgresClient.SubmitActivities(summaries)
 }
 
 // NewActivityTracker creates a new activity tracker with default settings
@@ -684,7 +698,7 @@ func getCurrentWindowInfo() (string, error) {
 	return formatWindowOutput(nil, windowName, windowClass), nil
 }
 
-func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration) {
+func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration, postgresClient *postgres.Client) {
 	// Add panic recovery to prevent crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -762,6 +776,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 				infoLog("Submitting final data before shutdown...")
 				summaries := tracker.GetActivitySummaries()
 				submitActivitiesToRescueTime(apiKey, summaries)
+				submitActivitiesToPostgres(postgresClient, summaries)
 			} else if dryRun {
 				infoLog("DRY-RUN: Final submission preview")
 				summaries := tracker.GetActivitySummaries()
@@ -792,6 +807,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 				previewSubmission(summaries)
 			} else {
 				submitActivitiesToRescueTime(apiKey, summaries)
+				submitActivitiesToPostgres(postgresClient, summaries)
 			}
 
 			// Save to file if requested
@@ -871,6 +887,7 @@ func main() {
 	submit := flag.Bool("submit", false, "Submit activity data to RescueTime API")
 	dryRun := flag.Bool("dry-run", false, "Show what would be submitted without making API calls")
 	saveToFile := flag.Bool("save", false, "Save activity summaries to rescuetime-sessions.json")
+	postgresConn := flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost/rescuetime)")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	interval := flag.Duration("interval", defaultPollInterval, "Polling interval for monitoring mode (e.g., 100ms, 1s)")
@@ -951,9 +968,24 @@ func main() {
 				errorLog("Configuration validation failed: %v", err)
 				os.Exit(1)
 			}
+		}
 
+		// Initialize PostgreSQL client if connection string is provided
+		var postgresClient *postgres.Client
+		if *postgresConn != "" {
+			client, err := postgres.NewClient(*postgresConn)
+			if err != nil {
+				errorLog("Failed to initialize PostgreSQL client: %v", err)
+				os.Exit(1)
+			}
+			postgresClient = client
+			defer postgresClient.Close()
+			infoLog("PostgreSQL storage enabled")
+		}
+
+		if *submit || *dryRun {
 			// Call with API submission enabled
-			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile, *idleThreshold)
+			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile, *idleThreshold, postgresClient)
 		} else {
 			// Validate basic configuration even without API submission
 			if err := validateConfiguration(false, false, "", *submissionInterval, *interval); err != nil {
@@ -961,7 +993,7 @@ func main() {
 				os.Exit(1)
 			}
 			// Call without API submission
-			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile, *idleThreshold)
+			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile, *idleThreshold, postgresClient)
 		}
 	} else {
 		// Single execution mode

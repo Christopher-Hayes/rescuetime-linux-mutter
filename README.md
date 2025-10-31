@@ -136,6 +136,31 @@ RESCUE_TIME_API_KEY=your_api_key_here
 ./active-window -track -submit -debug
 ```
 
+### PostgreSQL Storage (Optional)
+
+You can optionally store activity data in your own PostgreSQL database alongside submitting to RescueTime:
+
+```bash
+# Track and submit to both RescueTime and PostgreSQL
+./active-window -track -submit -postgres "postgres://user:pass@localhost/rescuetime"
+
+# Use PostgreSQL without RescueTime API
+./active-window -track -postgres "postgres://user:pass@localhost/rescuetime"
+
+# Set via environment variable
+export POSTGRES_CONNECTION_STRING="postgres://user:pass@localhost/rescuetime"
+./active-window -track -submit
+```
+
+**Benefits:**
+- Own your data - maintain a local copy of all activity tracking
+- Custom analytics - query your data directly with SQL
+- Privacy - keep sensitive work data on your own infrastructure
+- Backup - redundant storage alongside RescueTime's cloud
+
+**Setup:**
+See [postgres/README.md](postgres/README.md) for detailed setup instructions, database schema, and example queries.
+
 ### Ignoring Applications
 
 To avoid double-tracking (e.g., when using RescueTime plugins for VS Code or browsers), you can ignore specific applications:
