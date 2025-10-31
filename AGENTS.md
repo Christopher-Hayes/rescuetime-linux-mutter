@@ -34,10 +34,10 @@ cat rescuetime-sessions.json | jq .
 - **Connection flow**: 
   ```
   Go app → D-Bus session bus → GNOME Shell → Extension → Window metadata (JSON)
-     ↓         200ms poll          ↓             ↓              ↓
+     ↓         1000ms poll          ↓             ↓              ↓
   Parse JSON ← D-Bus response ← Extension ← Wayland compositor
   ```
-- **Detection method**: Polling at 200ms intervals (not event-driven due to D-Bus limitations)
+- **Detection method**: Polling at 1000ms intervals (not event-driven due to D-Bus limitations)
 - **Performance impact**: <1% CPU, ~10MB RAM (polling is lightweight, D-Bus handles multiplexing)
 
 ### Activity Tracking State Machine
@@ -66,7 +66,7 @@ Window Focus Change Detected (WmClass changes)
 **Why these thresholds?**
 - 30s merge: Users often switch windows briefly then return (checking docs, alt-tab)
 - 10s minimum: Accidental window activations, passing through apps
-- 200ms poll: Balance between responsiveness and CPU usage
+- 1000ms poll: Balance between responsiveness and CPU usage
 
 ### Dual API Strategy (Legacy + Native)
 ```go
@@ -187,7 +187,7 @@ errorLog()   // Always: API failures, setup errors
 **Pattern**: Use specific log functions, not generic `log.Printf()` - enables filtering by flag
 
 ### Error Handling Strategy
-- **D-Bus failures**: Retry on next poll (200ms), log once with `debugLog()` to avoid spam
+- **D-Bus failures**: Retry on next poll (1000ms), log once with `debugLog()` to avoid spam
 - **API submissions**: Exponential backoff (1s, 2s, 4s), distinguish 4xx (fail fast) from 5xx (retry)
 - **Validation failures**: Log and skip invalid data, don't crash the entire submission batch
 - **Graceful degradation**: Continue tracking if API fails, submit on next interval

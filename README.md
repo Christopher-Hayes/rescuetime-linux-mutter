@@ -127,7 +127,7 @@ RESCUE_TIME_API_KEY=your_api_key_here
 # Track and submit to RescueTime API (production mode)
 ./active-window -track -submit
 
-# Custom polling interval (default: 200ms)
+# Custom polling interval (default: 1000ms)
 ./active-window -track -submit -interval 500ms
 
 # Custom submission interval (default: 15m)
@@ -148,7 +148,7 @@ RESCUE_TIME_API_KEY=your_api_key_here
 | `-save` | Save activity summaries to `rescuetime-sessions.json` | `false` |
 | `-debug` | Enable debug logging | `false` |
 | `-verbose` | Enable verbose logging | `false` |
-| `-interval` | Polling interval for window detection | `200ms` |
+| `-interval` | Polling interval for window detection | `1000ms` |
 | `-submission-interval` | How often to submit data to RescueTime | `15m` |
 
 ### Running as a Service
@@ -340,7 +340,7 @@ cat rescuetime-sessions.json | jq .
 - Connects to D-Bus session bus
 - Calls `org.gnome.Shell` → `/org/gnome/shell/extensions/FocusedWindow`
 - Returns structured `MutterWindow` information
-- Configurable polling interval (default: 200ms)
+- Configurable polling interval (default: 1000ms)
 
 **2. Activity Tracking** (`ActivityTracker`)
 - Thread-safe session management with `sync.RWMutex`

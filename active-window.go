@@ -25,7 +25,7 @@ const (
 	// Session tracking thresholds
 	defaultMergeThreshold = 30 * time.Second // Merge sessions if gap is less than this
 	defaultMinDuration    = 10 * time.Second // Ignore sessions shorter than this
-	defaultPollInterval   = 200 * time.Millisecond
+	defaultPollInterval   = 1000 * time.Millisecond
 	defaultSubmitInterval = 15 * time.Minute
 
 	// API retry configuration
@@ -324,10 +324,13 @@ func summaryToPayload(summary ActivitySummary) RescueTimePayload {
 	// Format start time as "YYYY-MM-DD HH:MM:SS"
 	startTimeFormatted := summary.FirstSeen.Format("2006-01-02 15:04:05")
 
+	// For offline time API, activity_name is the application name
+	activityName := summary.AppClass
+
 	return RescueTimePayload{
 		StartTime:       startTimeFormatted,
 		Duration:        durationMinutes,
-		ActivityName:    summary.AppClass,
+		ActivityName:    activityName,
 		ActivityDetails: summary.ActivityDetails,
 	}
 }
@@ -356,6 +359,14 @@ func summaryToUserClientEvent(summary ActivitySummary) UserClientEventPayload {
 func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 	var lastErr error
 
+	// Check if API key is present
+	if apiKey == "" {
+		return fmt.Errorf("API key is empty - cannot submit to RescueTime")
+	}
+	
+	debugLog("API key length: %d characters", len(apiKey))
+	debugLog("API key first 5 chars: %s..., last 5 chars: ...%s", apiKey[:5], apiKey[len(apiKey)-5:])
+
 	for attempt := 0; attempt < maxAPIRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s
@@ -364,11 +375,19 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 			time.Sleep(delay)
 		}
 
-		// Convert payload to JSON
-		jsonData, err := json.Marshal(payload)
+		// Convert payload to JSON (disable HTML escaping)
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err := encoder.Encode(payload)
 		if err != nil {
 			return fmt.Errorf("failed to marshal payload: %v", err)
 		}
+		
+		// Remove trailing newline that Encode adds
+		jsonData := bytes.TrimSpace(buffer.Bytes())
+
+		debugLog("Submitting payload: %s", string(jsonData))
 
 		// Create request
 		url := fmt.Sprintf("https://www.rescuetime.com/anapi/offline_time_post?key=%s", apiKey)
@@ -379,6 +398,12 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 		}
 
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "rescuetime-linux-mutter/1.0")
+		req.Header.Set("Accept", "*/*")
+
+		debugLog("Sending POST to: %s", "https://www.rescuetime.com/anapi/offline_time_post?key=***")
+		debugLog("Request headers: Content-Type=%s, User-Agent=%s", req.Header.Get("Content-Type"), req.Header.Get("User-Agent"))
+		debugLog("Request body: %s", string(jsonData))
 
 		// Send request
 		client := &http.Client{Timeout: apiTimeout}
@@ -391,6 +416,10 @@ func submitToRescueTime(apiKey string, payload RescueTimePayload) error {
 		// Read response body
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+
+		debugLog("Response status: %d", resp.StatusCode)
+		debugLog("Response headers: %v", resp.Header)
+		debugLog("Response body: %s", string(body))
 
 		// Check response status
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -541,8 +570,9 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 	legacyFallbackCount := 0
 
 	for _, summary := range summaries {
-		// Skip activities with a very short duration (< 1 minute)
-		if summary.TotalDuration < time.Minute {
+		// RescueTime API appears to require minimum 5 minutes duration
+		if summary.TotalDuration < 5*time.Minute {
+			debugLog("Skipping %s: duration %v is less than 5 minutes", summary.AppClass, summary.TotalDuration)
 			continue
 		}
 
@@ -561,6 +591,11 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 				fmt.Printf("[FALLBACK] Attempting legacy API for %s...\n", summary.AppClass)
 
 				legacyPayload := summaryToPayload(summary)
+				
+				// Print the payload we're about to send
+				payloadJSON, _ := json.MarshalIndent(legacyPayload, "", "  ")
+				fmt.Printf("[DEBUG] Legacy payload for %s:\n%s\n", summary.AppClass, string(payloadJSON))
+				
 				// Validate before submitting
 				if validateErr := validatePayload(legacyPayload); validateErr != nil {
 					err = fmt.Errorf("invalid payload: %v", validateErr)
@@ -574,6 +609,11 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 		} else {
 			// No native credentials, use legacy API directly
 			payload := summaryToPayload(summary)
+			
+			// Print the payload we're about to send
+			payloadJSON, _ := json.MarshalIndent(payload, "", "  ")
+			fmt.Printf("[DEBUG] Submitting payload for %s:\n%s\n", summary.AppClass, string(payloadJSON))
+			
 			// Validate before submitting
 			if validateErr := validatePayload(payload); validateErr != nil {
 				err = fmt.Errorf("invalid payload: %v", validateErr)
@@ -1197,17 +1237,20 @@ func main() {
 		// Handle API submission setup
 		var apiKey string
 		if *submit || *dryRun {
-			// Load environment variables from .env file
-			err := loadEnvFile(".env")
-			if err != nil {
-				errorLog("Error loading .env file: %v", err)
-				fmt.Fprintf(os.Stderr, "\nCreate .env file: cp .env.example .env\n")
-				fmt.Fprintf(os.Stderr, "Then add your RescueTime API key: https://www.rescuetime.com/anapi/manage\n")
-				os.Exit(1)
-			}
-
-			// Get API key from environment
+			// Get API key from environment (can be set via .env file or op run)
 			apiKey = os.Getenv("RESCUE_TIME_API_KEY")
+			
+			// If not in environment, try loading from .env file
+			if apiKey == "" {
+				err := loadEnvFile(".env")
+				if err != nil {
+					errorLog("Error loading .env file: %v", err)
+					fmt.Fprintf(os.Stderr, "\nCreate .env file: cp .env.example .env\n")
+					fmt.Fprintf(os.Stderr, "Then add your RescueTime API key: https://www.rescuetime.com/anapi/manage\n")
+					os.Exit(1)
+				}
+				apiKey = os.Getenv("RESCUE_TIME_API_KEY")
+			}
 			
 			// Validate configuration before starting
 			if err := validateConfiguration(*submit, *dryRun, apiKey, *submissionInterval, *interval); err != nil {

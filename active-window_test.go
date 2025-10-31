@@ -13,8 +13,8 @@ func TestConstants(t *testing.T) {
 	if defaultMinDuration != 10*time.Second {
 		t.Errorf("defaultMinDuration should be 10s, got %v", defaultMinDuration)
 	}
-	if defaultPollInterval != 200*time.Millisecond {
-		t.Errorf("defaultPollInterval should be 200ms, got %v", defaultPollInterval)
+	if defaultPollInterval != 1000*time.Millisecond {
+		t.Errorf("defaultPollInterval should be 1000ms, got %v", defaultPollInterval)
 	}
 	if maxAPIRetries != 3 {
 		t.Errorf("maxAPIRetries should be 3, got %d", maxAPIRetries)
