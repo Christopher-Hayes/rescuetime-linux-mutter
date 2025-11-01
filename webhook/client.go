@@ -51,6 +51,7 @@ type ActivitySession struct {
 	AppClass    string        `json:"app_class"`
 	WindowTitle string        `json:"window_title"`
 	Duration    time.Duration `json:"duration"`
+	Ignored     bool          `json:"ignored"` // true if app is in ignore list (excluded from RescueTime)
 }
 
 // WebhookPayload represents the JSON structure sent to the webhook endpoint.

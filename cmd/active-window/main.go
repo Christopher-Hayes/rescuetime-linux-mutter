@@ -99,7 +99,8 @@ type ActivitySession struct {
 	AppClass    string        `json:"app_class"`
 	WindowTitle string        `json:"window_title"`
 	Duration    time.Duration `json:"duration"`
-	Active      bool          `json:"active"` // true if session is currently ongoing
+	Active      bool          `json:"active"`  // true if session is currently ongoing
+	Ignored     bool          `json:"ignored"` // true if app is in ignore list (excluded from RescueTime)
 }
 
 // ActivityTracker manages tracking of application usage sessions
@@ -107,10 +108,11 @@ type ActivityTracker struct {
 	mu               sync.RWMutex
 	currentSession   *ActivitySession
 	sessions         []ActivitySession
-	mergeThreshold   time.Duration // merge sessions shorter than this threshold
-	minDuration      time.Duration // ignore sessions shorter than this
-	ignoredApps      map[string]bool // WmClass values to ignore
-	ignoreConfigPath string          // path to ignore list file
+	ignoredSessions  []ActivitySession   // sessions from ignored apps (still tracked for PostgreSQL/webhook)
+	mergeThreshold   time.Duration       // merge sessions shorter than this threshold
+	minDuration      time.Duration       // ignore sessions shorter than this
+	ignoredApps      map[string]bool     // WmClass values to ignore
+	ignoreConfigPath string              // path to ignore list file
 }
 
 // loadEnvFile loads environment variables from a .env file
@@ -182,6 +184,7 @@ func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[s
 			AppClass:    session.AppClass,
 			WindowTitle: session.WindowTitle,
 			Duration:    session.Duration,
+			Ignored:     session.Ignored,
 		}
 	}
 	
@@ -212,6 +215,7 @@ func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[stri
 			AppClass:    session.AppClass,
 			WindowTitle: session.WindowTitle,
 			Duration:    session.Duration,
+			Ignored:     session.Ignored,
 		}
 	}
 	
@@ -223,6 +227,7 @@ func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[stri
 func NewActivityTracker() *ActivityTracker {
 	tracker := &ActivityTracker{
 		sessions:         make([]ActivitySession, 0),
+		ignoredSessions:  make([]ActivitySession, 0),
 		mergeThreshold:   defaultMergeThreshold,
 		minDuration:      defaultMinDuration,
 		ignoredApps:      make(map[string]bool),
@@ -312,36 +317,30 @@ func (at *ActivityTracker) saveIgnoredApps() error {
 
 // StartSession begins tracking a new activity session
 func (at *ActivityTracker) StartSession(appClass, windowTitle string) {
-	// Check if app should be ignored
-	if at.isAppIgnored(appClass) {
-		debugLog("Ignoring application: %s", appClass)
-		
-		// End current session if exists, but don't start a new one
-		at.mu.Lock()
-		if at.currentSession != nil && at.currentSession.Active {
-			at.endCurrentSessionUnsafe(time.Now())
-		}
-		at.currentSession = nil
-		at.mu.Unlock()
-		return
-	}
-
 	at.mu.Lock()
 	defer at.mu.Unlock()
 
 	now := time.Now()
+
+	// Check if app should be ignored
+	isIgnored := at.ignoredApps[appClass]
+	
+	if isIgnored {
+		debugLog("Tracking ignored application: %s (will be sent to PostgreSQL/webhook but not RescueTime)", appClass)
+	}
 
 	// End the current session if one exists
 	if at.currentSession != nil && at.currentSession.Active {
 		at.endCurrentSessionUnsafe(now)
 	}
 
-	// Start new session
+	// Start new session (even for ignored apps - we want to track them)
 	at.currentSession = &ActivitySession{
 		StartTime:   now,
 		AppClass:    appClass,
 		WindowTitle: windowTitle,
 		Active:      true,
+		Ignored:     isIgnored, // Mark as ignored
 	}
 }
 
@@ -357,12 +356,18 @@ func (at *ActivityTracker) endCurrentSessionUnsafe(endTime time.Time) {
 
 	// Only store sessions that meet minimum duration requirement
 	if at.currentSession.Duration >= at.minDuration {
-		// Check if we should merge with the last session
-		if at.shouldMergeWithLastSession() {
-			at.mergeWithLastSession()
+		if at.currentSession.Ignored {
+			// Store ignored sessions separately (for PostgreSQL/webhook only)
+			at.ignoredSessions = append(at.ignoredSessions, *at.currentSession)
+			debugLog("Stored ignored session: %s (%v)", at.currentSession.AppClass, at.currentSession.Duration)
 		} else {
-			// Store the session
-			at.sessions = append(at.sessions, *at.currentSession)
+			// Check if we should merge with the last session
+			if at.shouldMergeWithLastSession() {
+				at.mergeWithLastSession()
+			} else {
+				// Store the session
+				at.sessions = append(at.sessions, *at.currentSession)
+			}
 		}
 	}
 }
@@ -480,8 +485,9 @@ func (at *ActivityTracker) ClearCompletedSessions() {
 	at.mu.Lock()
 	defer at.mu.Unlock()
 
-	// Clear all stored sessions but keep the current active one
+	// Clear all stored sessions (both regular and ignored) but keep the current active one
 	at.sessions = make([]ActivitySession, 0)
+	at.ignoredSessions = make([]ActivitySession, 0)
 }
 
 // GetSessions returns a copy of all completed sessions.
@@ -494,6 +500,30 @@ func (at *ActivityTracker) GetSessions() []ActivitySession {
 	sessionsCopy := make([]ActivitySession, len(at.sessions))
 	copy(sessionsCopy, at.sessions)
 	return sessionsCopy
+}
+
+// GetIgnoredSessions returns a copy of all completed ignored sessions.
+// These are sessions from apps in the ignore list, excluded from RescueTime but sent to PostgreSQL/webhook.
+func (at *ActivityTracker) GetIgnoredSessions() []ActivitySession {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+
+	// Return a copy to prevent external modifications
+	sessionsCopy := make([]ActivitySession, len(at.ignoredSessions))
+	copy(sessionsCopy, at.ignoredSessions)
+	return sessionsCopy
+}
+
+// GetAllSessions returns both regular and ignored sessions combined.
+func (at *ActivityTracker) GetAllSessions() []ActivitySession {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+
+	// Combine both regular and ignored sessions
+	allSessions := make([]ActivitySession, 0, len(at.sessions)+len(at.ignoredSessions))
+	allSessions = append(allSessions, at.sessions...)
+	allSessions = append(allSessions, at.ignoredSessions...)
+	return allSessions
 }
 
 func getActiveWindow() (*common.MutterWindow, error) {
@@ -832,7 +862,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			if submitToAPI && !dryRun {
 				infoLog("Submitting final data before shutdown...")
 				summaries := tracker.GetActivitySummaries()
-				sessions := tracker.GetSessions()
+				sessions := tracker.GetAllSessions() // Include both regular and ignored sessions
 				submitActivitiesToRescueTime(apiKey, summaries)
 				submitActivitiesToPostgres(postgresClient, summaries, sessions)
 				submitActivitiesToWebhook(webhookClient, summaries, sessions)
@@ -860,7 +890,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 		case <-submitChan:
 			// Time to submit data to RescueTime (or preview in dry-run mode)
 			summaries := tracker.GetActivitySummaries()
-			sessions := tracker.GetSessions()
+			sessions := tracker.GetAllSessions() // Include both regular and ignored sessions
 			
 			if dryRun {
 				infoLog("DRY-RUN: Submission preview")
@@ -896,18 +926,17 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 				// Handle idle state transitions
 				if isIdle && !wasIdle {
 					// User just became idle - end current session
-					verboseLog("User went idle (idle for %v), pausing tracking", idleTime)
+					fmt.Printf("%s %s\n", time.Now().Format("15:04"), color.YellowString("User is idle, pausing tracking"))
 					tracker.EndCurrentSession()
 					wasIdle = true
 					continue // Skip window tracking while idle
 				} else if !isIdle && wasIdle {
 					// User returned from idle - resume tracking
-					verboseLog("User returned from idle (idle time: %v), resuming tracking", idleTime)
+					fmt.Printf("%s %s\n", time.Now().Format("15:04"), color.YellowString("User returned from idle, resuming tracking"))
 					wasIdle = false
 					// Will start new session below if window info is available
 				} else if isIdle {
 					// Still idle - skip this iteration
-					debugLog("User still idle (%v), skipping window poll", idleTime)
 					continue
 				}
 				// If not idle and wasn't idle, continue normal tracking below

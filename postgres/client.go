@@ -54,6 +54,7 @@ type ActivitySession struct {
 	AppClass    string        `json:"app_class"`
 	WindowTitle string        `json:"window_title"`
 	Duration    time.Duration `json:"duration"`
+	Ignored     bool          `json:"ignored"` // true if app is in ignore list (excluded from RescueTime)
 	CreatedAt   time.Time     `json:"created_at,omitempty"`
 }
 
@@ -151,6 +152,7 @@ func (c *Client) initializeSchema() error {
 		app_class VARCHAR(255) NOT NULL,
 		window_title TEXT,
 		duration_seconds INTEGER NOT NULL,
+		ignored BOOLEAN DEFAULT FALSE,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		CONSTRAINT valid_duration CHECK (duration_seconds >= 0),
 		CONSTRAINT valid_time_range CHECK (end_time >= start_time)
@@ -167,6 +169,7 @@ func (c *Client) initializeSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON activity_sessions(start_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_end_time ON activity_sessions(end_time);`,
 		`CREATE INDEX IF NOT EXISTS idx_sessions_app_time ON activity_sessions(app_class, start_time);`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_ignored ON activity_sessions(ignored);`,
 	}
 
 	for _, indexSQL := range sessionIndexesSQL {
@@ -224,8 +227,8 @@ func (c *Client) SubmitSession(session ActivitySession) error {
 	defer cancel()
 
 	insertSQL := `
-		INSERT INTO activity_sessions (start_time, end_time, app_class, window_title, duration_seconds)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO activity_sessions (start_time, end_time, app_class, window_title, duration_seconds, ignored)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING id
 	`
 
@@ -236,13 +239,18 @@ func (c *Client) SubmitSession(session ActivitySession) error {
 		session.AppClass,
 		session.WindowTitle,
 		int(session.Duration.Seconds()),
+		session.Ignored,
 	).Scan(&id)
 
 	if err != nil {
 		return fmt.Errorf("failed to insert session: %v", err)
 	}
 
-	c.debugLog("Inserted session ID %d: %s (%v)", id, session.AppClass, session.Duration)
+	ignoredLabel := ""
+	if session.Ignored {
+		ignoredLabel = " (ignored)"
+	}
+	c.debugLog("Inserted session ID %d: %s (%v)%s", id, session.AppClass, session.Duration, ignoredLabel)
 	return nil
 }
 
