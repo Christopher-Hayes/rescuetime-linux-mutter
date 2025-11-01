@@ -162,8 +162,10 @@ func submitActivitiesToRescueTime(apiKey string, summaries map[string]ActivitySu
 	client.SubmitActivities(summaries)
 }
 
-// submitActivitiesToPostgres submits all activity summaries to PostgreSQL database
-func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[string]ActivitySummary) {
+// submitActivitiesToPostgres submits activity summaries and individual sessions to PostgreSQL database.
+// This stores both aggregated summaries (matching RescueTime API data) and individual sessions
+// for more granular tracking and custom application development.
+func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[string]ActivitySummary, sessions []ActivitySession) {
 	if postgresClient == nil {
 		return
 	}
@@ -171,12 +173,29 @@ func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[s
 	// Set debug mode to match global setting
 	postgresClient.DebugMode = debugMode
 	
-	// Delegate to the postgres package
+	// Convert ActivitySession to postgres.ActivitySession (they're compatible)
+	pgSessions := make([]postgres.ActivitySession, len(sessions))
+	for i, session := range sessions {
+		pgSessions[i] = postgres.ActivitySession{
+			StartTime:   session.StartTime,
+			EndTime:     session.EndTime,
+			AppClass:    session.AppClass,
+			WindowTitle: session.WindowTitle,
+			Duration:    session.Duration,
+		}
+	}
+	
+	// Submit individual sessions first (more granular data)
+	postgresClient.SubmitSessions(pgSessions)
+	
+	// Then submit aggregated summaries (matching RescueTime API data)
 	postgresClient.SubmitActivities(summaries)
 }
 
-// submitActivitiesToWebhook submits all activity summaries to webhook endpoint
-func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[string]ActivitySummary) {
+// submitActivitiesToWebhook submits activity summaries and individual sessions to webhook endpoint.
+// This sends both aggregated summaries (matching RescueTime API data) and individual sessions
+// for more granular tracking and custom application development.
+func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[string]ActivitySummary, sessions []ActivitySession) {
 	if webhookClient == nil {
 		return
 	}
@@ -184,8 +203,20 @@ func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[stri
 	// Set debug mode to match global setting
 	webhookClient.DebugMode = debugMode
 	
-	// Delegate to the webhook package
-	webhookClient.SubmitActivities(summaries)
+	// Convert ActivitySession to webhook.ActivitySession (they're compatible)
+	whSessions := make([]webhook.ActivitySession, len(sessions))
+	for i, session := range sessions {
+		whSessions[i] = webhook.ActivitySession{
+			StartTime:   session.StartTime,
+			EndTime:     session.EndTime,
+			AppClass:    session.AppClass,
+			WindowTitle: session.WindowTitle,
+			Duration:    session.Duration,
+		}
+	}
+	
+	// Submit both summaries and sessions
+	webhookClient.SubmitActivitiesWithSessions(summaries, whSessions)
 }
 
 // NewActivityTracker creates a new activity tracker with default settings
@@ -451,6 +482,18 @@ func (at *ActivityTracker) ClearCompletedSessions() {
 
 	// Clear all stored sessions but keep the current active one
 	at.sessions = make([]ActivitySession, 0)
+}
+
+// GetSessions returns a copy of all completed sessions.
+// This provides access to individual session data for granular tracking.
+func (at *ActivityTracker) GetSessions() []ActivitySession {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+
+	// Return a copy to prevent external modifications
+	sessionsCopy := make([]ActivitySession, len(at.sessions))
+	copy(sessionsCopy, at.sessions)
+	return sessionsCopy
 }
 
 func getActiveWindow() (*common.MutterWindow, error) {
@@ -789,9 +832,10 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			if submitToAPI && !dryRun {
 				infoLog("Submitting final data before shutdown...")
 				summaries := tracker.GetActivitySummaries()
+				sessions := tracker.GetSessions()
 				submitActivitiesToRescueTime(apiKey, summaries)
-				submitActivitiesToPostgres(postgresClient, summaries)
-				submitActivitiesToWebhook(webhookClient, summaries)
+				submitActivitiesToPostgres(postgresClient, summaries, sessions)
+				submitActivitiesToWebhook(webhookClient, summaries, sessions)
 			} else if dryRun {
 				infoLog("DRY-RUN: Final submission preview")
 				summaries := tracker.GetActivitySummaries()
@@ -816,14 +860,15 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 		case <-submitChan:
 			// Time to submit data to RescueTime (or preview in dry-run mode)
 			summaries := tracker.GetActivitySummaries()
+			sessions := tracker.GetSessions()
 			
 			if dryRun {
 				infoLog("DRY-RUN: Submission preview")
 				previewSubmission(summaries)
 			} else {
 				submitActivitiesToRescueTime(apiKey, summaries)
-				submitActivitiesToPostgres(postgresClient, summaries)
-				submitActivitiesToWebhook(webhookClient, summaries)
+				submitActivitiesToPostgres(postgresClient, summaries, sessions)
+				submitActivitiesToWebhook(webhookClient, summaries, sessions)
 			}
 
 			// Save to file if requested

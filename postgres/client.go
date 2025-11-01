@@ -288,6 +288,8 @@ func (c *Client) SubmitSummary(summary ActivitySummary) error {
 }
 
 // SubmitActivities stores multiple activity summaries in the database.
+// This stores the same aggregated data that gets sent to RescueTime's API,
+// allowing users to build their own applications with the same data.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
 		color.Yellow("[POSTGRES] No activities to submit.")
@@ -312,6 +314,39 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	color.New(color.FgCyan, color.Bold).Printf("\n=== PostgreSQL Storage Summary ===\n")
 	if successCount > 0 {
 		color.Green("Stored: %d\n", successCount)
+	}
+	if failCount > 0 {
+		color.Red("Failed: %d\n", failCount)
+	}
+}
+
+// SubmitSessions stores multiple activity sessions in the database.
+// This stores individual session data (start/end times, window titles) which
+// provides more granular tracking data than the aggregated summaries.
+func (c *Client) SubmitSessions(sessions []ActivitySession) {
+	if len(sessions) == 0 {
+		color.Yellow("[POSTGRES] No sessions to submit.")
+		return
+	}
+
+	color.New(color.FgCyan, color.Bold).Printf("\n=== Storing %d sessions in PostgreSQL ===\n", len(sessions))
+
+	successCount := 0
+	failCount := 0
+
+	for _, session := range sessions {
+		err := c.SubmitSession(session)
+		if err != nil {
+			color.Red("[POSTGRES] ✗ Failed to store session %s: %v\n", session.AppClass, err)
+			failCount++
+		} else {
+			successCount++
+		}
+	}
+
+	color.New(color.FgCyan, color.Bold).Printf("\n=== PostgreSQL Session Storage Summary ===\n")
+	if successCount > 0 {
+		color.Green("Stored: %d sessions\n", successCount)
 	}
 	if failCount > 0 {
 		color.Red("Failed: %d\n", failCount)

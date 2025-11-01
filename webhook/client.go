@@ -44,13 +44,23 @@ const (
 // Type aliases to use RescueTime's types for consistency
 type ActivitySummary = rescuetime.ActivitySummary
 
+// ActivitySession represents a single continuous session with an application.
+type ActivitySession struct {
+	StartTime   time.Time     `json:"start_time"`
+	EndTime     time.Time     `json:"end_time"`
+	AppClass    string        `json:"app_class"`
+	WindowTitle string        `json:"window_title"`
+	Duration    time.Duration `json:"duration"`
+}
+
 // WebhookPayload represents the JSON structure sent to the webhook endpoint.
-// It includes metadata about the submission along with activity summaries.
+// It includes metadata about the submission along with activity summaries and individual sessions.
 type WebhookPayload struct {
 	Timestamp  time.Time                  `json:"timestamp"`
 	Source     string                     `json:"source"`
 	Version    string                     `json:"version"`
 	Summaries  []ActivitySummary          `json:"summaries"`
+	Sessions   []ActivitySession          `json:"sessions,omitempty"`
 	Metadata   map[string]interface{}     `json:"metadata,omitempty"`
 }
 
@@ -124,6 +134,7 @@ func (c *Client) SubmitSummary(summary ActivitySummary) error {
 }
 
 // SubmitActivities sends multiple activity summaries to the webhook endpoint.
+// This sends aggregated summaries matching what RescueTime receives.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
 		color.Yellow("[WEBHOOK] No activities to submit.")
@@ -164,6 +175,63 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	}
 
 	color.New(color.FgGreen, color.Bold).Printf("[SUCCESS] Sent %d activities to webhook\n", len(summaryList))
+}
+
+// SubmitActivitiesWithSessions sends both activity summaries and individual sessions to the webhook endpoint.
+// This provides the same granular data that gets sent to RescueTime's API, allowing users to build
+// their own applications with complete tracking information.
+func (c *Client) SubmitActivitiesWithSessions(summaries map[string]ActivitySummary, sessions []ActivitySession) {
+	if len(summaries) == 0 && len(sessions) == 0 {
+		color.Yellow("[WEBHOOK] No activities to submit.")
+		return
+	}
+
+	color.New(color.FgCyan, color.Bold).Printf("\n=== Sending %d activities and %d sessions to webhook ===\n", len(summaries), len(sessions))
+
+	// Convert summaries map to slice for JSON payload
+	summaryList := make([]ActivitySummary, 0, len(summaries))
+	for _, summary := range summaries {
+		if err := c.validateSummary(summary); err != nil {
+			color.Red("[WEBHOOK] ✗ Skipping invalid summary for %s: %v\n", summary.AppClass, err)
+			continue
+		}
+		summaryList = append(summaryList, summary)
+	}
+
+	// Validate sessions
+	validSessions := make([]ActivitySession, 0, len(sessions))
+	for _, session := range sessions {
+		if err := c.validateSession(session); err != nil {
+			color.Red("[WEBHOOK] ✗ Skipping invalid session for %s: %v\n", session.AppClass, err)
+			continue
+		}
+		validSessions = append(validSessions, session)
+	}
+
+	if len(summaryList) == 0 && len(validSessions) == 0 {
+		color.Red("[WEBHOOK] No valid activities to submit after validation.")
+		return
+	}
+
+	payload := WebhookPayload{
+		Timestamp: time.Now(),
+		Source:    "rescuetime-linux-mutter",
+		Version:   "1.0.0",
+		Summaries: summaryList,
+		Sessions:  validSessions,
+		Metadata: map[string]interface{}{
+			"summary_count": len(summaryList),
+			"session_count": len(validSessions),
+			"submitted":     time.Now().Format(time.RFC3339),
+		},
+	}
+
+	if err := c.sendPayload(payload); err != nil {
+		color.Red("[WEBHOOK] ✗ Failed to send activities: %v\n", err)
+		return
+	}
+
+	color.New(color.FgGreen, color.Bold).Printf("[SUCCESS] Sent %d summaries and %d sessions to webhook\n", len(summaryList), len(validSessions))
 }
 
 // sendPayload sends the webhook payload with retry logic.
@@ -255,6 +323,26 @@ func (c *Client) validateSummary(summary ActivitySummary) error {
 	}
 	if summary.LastSeen.Before(summary.FirstSeen) {
 		return fmt.Errorf("last_seen must be after or equal to first_seen")
+	}
+	return nil
+}
+
+// validateSession checks if a session is valid before submission.
+func (c *Client) validateSession(session ActivitySession) error {
+	if session.AppClass == "" {
+		return fmt.Errorf("app_class is required")
+	}
+	if session.StartTime.IsZero() {
+		return fmt.Errorf("start_time is required")
+	}
+	if session.EndTime.IsZero() {
+		return fmt.Errorf("end_time is required")
+	}
+	if session.EndTime.Before(session.StartTime) {
+		return fmt.Errorf("end_time must be after start_time")
+	}
+	if session.Duration < 0 {
+		return fmt.Errorf("duration must be non-negative")
 	}
 	return nil
 }
