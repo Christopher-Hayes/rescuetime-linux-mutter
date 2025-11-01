@@ -16,6 +16,7 @@ import (
 	"github.com/Christopher-Hayes/rescuetime-linux-mutter/internal/common"
 	"github.com/Christopher-Hayes/rescuetime-linux-mutter/postgres"
 	"github.com/Christopher-Hayes/rescuetime-linux-mutter/rescuetime"
+	"github.com/Christopher-Hayes/rescuetime-linux-mutter/webhook"
 	"github.com/fatih/color"
 	"github.com/godbus/dbus/v5"
 )
@@ -172,6 +173,19 @@ func submitActivitiesToPostgres(postgresClient *postgres.Client, summaries map[s
 	
 	// Delegate to the postgres package
 	postgresClient.SubmitActivities(summaries)
+}
+
+// submitActivitiesToWebhook submits all activity summaries to webhook endpoint
+func submitActivitiesToWebhook(webhookClient *webhook.Client, summaries map[string]ActivitySummary) {
+	if webhookClient == nil {
+		return
+	}
+	
+	// Set debug mode to match global setting
+	webhookClient.DebugMode = debugMode
+	
+	// Delegate to the webhook package
+	webhookClient.SubmitActivities(summaries)
 }
 
 // NewActivityTracker creates a new activity tracker with default settings
@@ -698,7 +712,7 @@ func getCurrentWindowInfo() (string, error) {
 	return formatWindowOutput(nil, windowName, windowClass), nil
 }
 
-func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration, postgresClient *postgres.Client) {
+func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey string, submissionInterval time.Duration, dryRun bool, saveToFile bool, idleThreshold time.Duration, postgresClient *postgres.Client, webhookClient *webhook.Client) {
 	// Add panic recovery to prevent crashes
 	defer func() {
 		if r := recover(); r != nil {
@@ -777,6 +791,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 				summaries := tracker.GetActivitySummaries()
 				submitActivitiesToRescueTime(apiKey, summaries)
 				submitActivitiesToPostgres(postgresClient, summaries)
+				submitActivitiesToWebhook(webhookClient, summaries)
 			} else if dryRun {
 				infoLog("DRY-RUN: Final submission preview")
 				summaries := tracker.GetActivitySummaries()
@@ -808,6 +823,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			} else {
 				submitActivitiesToRescueTime(apiKey, summaries)
 				submitActivitiesToPostgres(postgresClient, summaries)
+				submitActivitiesToWebhook(webhookClient, summaries)
 			}
 
 			// Save to file if requested
@@ -888,6 +904,7 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Show what would be submitted without making API calls")
 	saveToFile := flag.Bool("save", false, "Save activity summaries to rescuetime-sessions.json")
 	postgresConn := flag.String("postgres", "", "PostgreSQL connection string (e.g., postgres://user:pass@localhost/rescuetime)")
+	webhookURL := flag.String("webhook", "", "Webhook URL for sending activity data (e.g., https://example.com/webhook)")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	verbose := flag.Bool("verbose", false, "Enable verbose logging")
 	interval := flag.Duration("interval", defaultPollInterval, "Polling interval for monitoring mode (e.g., 100ms, 1s)")
@@ -983,9 +1000,22 @@ func main() {
 			infoLog("PostgreSQL storage enabled")
 		}
 
+		// Initialize Webhook client if URL is provided
+		var webhookClient *webhook.Client
+		if *webhookURL != "" {
+			client, err := webhook.NewClient(*webhookURL)
+			if err != nil {
+				errorLog("Failed to initialize webhook client: %v", err)
+				os.Exit(1)
+			}
+			webhookClient = client
+			defer webhookClient.Close()
+			infoLog("Webhook integration enabled: %s", *webhookURL)
+		}
+
 		if *submit || *dryRun {
 			// Call with API submission enabled
-			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile, *idleThreshold, postgresClient)
+			monitorWindowChanges(*interval, *submit, apiKey, *submissionInterval, *dryRun, *saveToFile, *idleThreshold, postgresClient, webhookClient)
 		} else {
 			// Validate basic configuration even without API submission
 			if err := validateConfiguration(false, false, "", *submissionInterval, *interval); err != nil {
@@ -993,7 +1023,7 @@ func main() {
 				os.Exit(1)
 			}
 			// Call without API submission
-			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile, *idleThreshold, postgresClient)
+			monitorWindowChanges(*interval, false, "", 0, false, *saveToFile, *idleThreshold, postgresClient, webhookClient)
 		}
 	} else {
 		// Single execution mode

@@ -121,6 +121,7 @@ RESCUE_TIME_API_KEY=xxx        # Legacy API
 RESCUE_TIME_ACCOUNT_KEY=xxx    # Native API (32-char hex)
 RESCUE_TIME_DATA_KEY=xxx       # Native API (44-char base64)
 POSTGRES_CONNECTION_STRING=xxx # Optional PostgreSQL storage
+WEBHOOK_URL=xxx                # Optional webhook endpoint
 ```
 **Loading**: `loadEnvFile(".env")` reads key=value pairs, sets `os.Setenv()`
 
@@ -142,6 +143,35 @@ POSTGRES_CONNECTION_STRING=xxx # Optional PostgreSQL storage
 - Custom analytics - SQL queries on your activity patterns
 - Privacy - keep sensitive work data on own infrastructure
 - Offline operation - continue tracking when RescueTime API is unreachable
+
+### Webhook Module (Optional)
+**Purpose**: Send activity data to custom HTTP endpoints for integrations, automation, or custom analytics
+**Architecture**: Separate package `webhook/` following same pattern as `rescuetime/` and `postgres/` packages
+- **Type compatibility**: Uses `type ActivitySummary = rescuetime.ActivitySummary` for consistency
+- **HTTP POST**: Sends JSON payloads to any HTTP/HTTPS endpoint
+- **Retry logic**: Automatic retries with exponential backoff (3 attempts: 1s, 2s, 4s)
+- **Custom headers**: Support for authentication tokens/API keys via custom headers
+- **Validation**: Same validation rules as RescueTime API (duration, timestamps, etc.)
+- **Error handling**: Webhook failures don't block RescueTime or PostgreSQL submissions
+
+**Payload format**:
+```json
+{
+  "timestamp": "2025-10-31T14:30:00Z",
+  "source": "rescuetime-linux-mutter",
+  "version": "1.0.0",
+  "summaries": [{"app_class": "Firefox", "total_duration": 900000000000, ...}],
+  "metadata": {"count": 1, "submitted": "2025-10-31T14:30:00Z"}
+}
+```
+
+**Use cases**:
+- Custom dashboards - Build your own activity visualization
+- Automation - Trigger actions based on activity patterns (Slack notifications, etc.)
+- Data integration - Send to analytics platforms (Datadog, Grafana, custom services)
+- Productivity tools - Integrate with personal productivity systems
+- Time billing - Automatically track billable hours for freelancers
+- Research - Collect data for productivity research studies
 
 ## Code Conventions & Best Practices
 
@@ -236,6 +266,7 @@ successLog()  // Always: Successful operations (green, bold)
 - **`internal/common/dbus.go`**: Shared D-Bus configuration and data structures (FocusedWindow extension + IdleMonitor)
 - **`rescuetime/client.go`**: RescueTime API client package
 - **`postgres/client.go`**: PostgreSQL storage module (optional - stores activity data locally)
+- **`webhook/client.go`**: Webhook integration module (optional - sends activity data to custom HTTP endpoints)
 
 **Scripts & verification:**
 - **`scripts/build.sh`**: Dependency check + `go build` wrapper with user-friendly error messages
@@ -245,6 +276,8 @@ successLog()  // Always: Successful operations (green, bold)
 - **`rescuetime/example_test.go`**: Example/integration test for API client
 - **`postgres/client_test.go`**: Unit tests for PostgreSQL module
 - **`postgres/README.md`**: PostgreSQL setup guide and usage examples
+- **`webhook/client_test.go`**: Unit tests for webhook module
+- **`webhook/README.md`**: Webhook setup guide, payload format, and example implementations
 - **`docs/api-docs.md`**: Official RescueTime API documentation (copy from web for offline reference)
 - **`docs/TESTING.md`**: Testing guidelines
 
