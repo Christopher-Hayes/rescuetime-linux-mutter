@@ -300,7 +300,7 @@ func (c *Client) SubmitSummary(summary ActivitySummary) error {
 // allowing users to build their own applications with the same data.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
-		color.Yellow("[POSTGRES] No activities to submit.")
+		// No activities to submit - silence is fine, no need to spam logs
 		return
 	}
 
@@ -333,7 +333,7 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 // provides more granular tracking data than the aggregated summaries.
 func (c *Client) SubmitSessions(sessions []ActivitySession) {
 	if len(sessions) == 0 {
-		color.Yellow("[POSTGRES] No sessions to submit.")
+		// No sessions to submit - silence is fine, no need to spam logs
 		return
 	}
 

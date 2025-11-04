@@ -449,7 +449,7 @@ func (c *Client) SubmitNative(payload UserClientEventPayload) error {
 // falls back to offline_time_post API if native fails or credentials are missing.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
-		color.Yellow("No activities to submit.")
+		// No activities to submit - silence is fine, no need to spam logs
 		return
 	}
 

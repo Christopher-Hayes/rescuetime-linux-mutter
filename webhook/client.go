@@ -138,7 +138,7 @@ func (c *Client) SubmitSummary(summary ActivitySummary) error {
 // This sends aggregated summaries matching what RescueTime receives.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
-		color.Yellow("[WEBHOOK] No activities to submit.")
+		// No activities to submit - silence is fine, no need to spam logs
 		return
 	}
 
@@ -183,7 +183,7 @@ func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 // their own applications with complete tracking information.
 func (c *Client) SubmitActivitiesWithSessions(summaries map[string]ActivitySummary, sessions []ActivitySession) {
 	if len(summaries) == 0 && len(sessions) == 0 {
-		color.Yellow("[WEBHOOK] No activities to submit.")
+		// No activities to submit - silence is fine, no need to spam logs
 		return
 	}
 
