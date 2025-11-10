@@ -28,13 +28,13 @@ A Go CLI client for sending application usage to [RescueTime](https://www.rescue
 The application requires the **Focused Window D-Bus** extension to access window information:
 
 **Option A: Via GNOME Extensions Website**
-1. Visit https://extensions.gnome.org/extension/5839/focused-window-dbus/
+1. Visit https://extensions.gnome.org/extension/5992/focused-window-d-bus/
 2. Click "Install" (requires browser extension)
 3. Enable the extension
 
 **Option B: Manual Installation**
 ```bash
-git clone https://github.com/nichijou/gnome-shell-extension-focused-window-dbus.git
+git clone https://github.com/flexagoon/focused-window-dbus
 cd gnome-shell-extension-focused-window-dbus
 make install
 # Log out and log back in to reload GNOME Shell
