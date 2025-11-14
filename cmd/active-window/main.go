@@ -480,6 +480,50 @@ func (at *ActivityTracker) GetActivitySummaries() map[string]ActivitySummary {
 	return summaries
 }
 
+// GetCompletedActivitySummaries aggregates ONLY completed sessions by application class.
+// This excludes the current active session to prevent re-submitting the same time to RescueTime.
+// Use this for RescueTime API submissions. Use GetActivitySummaries() for real-time tracking
+// displays, PostgreSQL storage, and webhooks where you want to include ongoing activity.
+func (at *ActivityTracker) GetCompletedActivitySummaries() map[string]ActivitySummary {
+	at.mu.RLock()
+	defer at.mu.RUnlock()
+
+	summaries := make(map[string]ActivitySummary)
+
+	// Process all completed sessions ONLY (exclude current active session)
+	for _, session := range at.sessions {
+		key := session.AppClass
+		summary, exists := summaries[key]
+
+		if !exists {
+			summary = ActivitySummary{
+				AppClass:        session.AppClass,
+				ActivityDetails: session.WindowTitle,
+				FirstSeen:       session.StartTime,
+				LastSeen:        session.EndTime,
+			}
+		}
+
+		// Update summary
+		summary.TotalDuration += session.Duration
+		summary.SessionCount++
+
+		// Update time boundaries
+		if session.StartTime.Before(summary.FirstSeen) {
+			summary.FirstSeen = session.StartTime
+		}
+		if session.EndTime.After(summary.LastSeen) {
+			summary.LastSeen = session.EndTime
+			// Use the most recent window title as activity details
+			summary.ActivityDetails = session.WindowTitle
+		}
+
+		summaries[key] = summary
+	}
+
+	return summaries
+}
+
 // ClearCompletedSessions removes all completed sessions, keeping only the current active session
 func (at *ActivityTracker) ClearCompletedSessions() {
 	at.mu.Lock()
@@ -861,6 +905,7 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 			// Submit final data if API submission is enabled
 			if submitToAPI && !dryRun {
 				infoLog("Submitting final data before shutdown...")
+				// After EndCurrentSession(), all sessions are completed, so use GetActivitySummaries()
 				summaries := tracker.GetActivitySummaries()
 				sessions := tracker.GetAllSessions() // Include both regular and ignored sessions
 				submitActivitiesToRescueTime(apiKey, summaries)
@@ -889,21 +934,26 @@ func monitorWindowChanges(interval time.Duration, submitToAPI bool, apiKey strin
 
 		case <-submitChan:
 			// Time to submit data to RescueTime (or preview in dry-run mode)
-			summaries := tracker.GetActivitySummaries()
+			// Use GetCompletedActivitySummaries() for RescueTime to avoid re-submitting active sessions
+			completedSummaries := tracker.GetCompletedActivitySummaries()
+			// Use GetActivitySummaries() for PostgreSQL/webhooks to include real-time active session data
+			allSummaries := tracker.GetActivitySummaries()
 			sessions := tracker.GetAllSessions() // Include both regular and ignored sessions
 			
 			if dryRun {
 				infoLog("DRY-RUN: Submission preview")
-				previewSubmission(summaries)
+				previewSubmission(completedSummaries)
 			} else {
-				submitActivitiesToRescueTime(apiKey, summaries)
-				submitActivitiesToPostgres(postgresClient, summaries, sessions)
-				submitActivitiesToWebhook(webhookClient, summaries, sessions)
+				// Submit only completed sessions to RescueTime (prevents duplicate time tracking)
+				submitActivitiesToRescueTime(apiKey, completedSummaries)
+				// Submit all summaries (including active sessions) to PostgreSQL and webhooks for real-time tracking
+				submitActivitiesToPostgres(postgresClient, allSummaries, sessions)
+				submitActivitiesToWebhook(webhookClient, allSummaries, sessions)
 			}
 
-			// Save to file if requested
+			// Save to file if requested (save all summaries including active sessions for debugging)
 			if saveToFile {
-				err := saveSummariesToFile("rescuetime-sessions.json", summaries)
+				err := saveSummariesToFile("rescuetime-sessions.json", allSummaries)
 				if err != nil {
 					errorLog("Failed to save sessions to file: %v", err)
 				} else {

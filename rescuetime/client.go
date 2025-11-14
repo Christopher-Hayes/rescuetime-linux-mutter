@@ -37,7 +37,8 @@ const (
 	maxAPIRetries      = 3
 	baseRetryDelay     = 1 * time.Second
 	apiTimeout         = 10 * time.Second
-	maxOfflineDuration = 4 * time.Hour // RescueTime API limit for offline time
+	maxOfflineDuration = 4 * time.Hour       // RescueTime API limit for offline time
+	chunkSize          = 3*time.Hour + 55*time.Minute // Chunk size for splitting long sessions (slightly under 4h for safety)
 )
 
 // ActivitySummary represents aggregated time spent in an application.
@@ -444,14 +445,68 @@ func (c *Client) SubmitNative(payload UserClientEventPayload) error {
 	return fmt.Errorf("failed after %d attempts: %v", maxAPIRetries, lastErr)
 }
 
+// splitLongDurationSummaries splits summaries that exceed the 4-hour API limit into chunks.
+// Returns a new map with chunked summaries that can be safely submitted to RescueTime.
+func splitLongDurationSummaries(summaries map[string]ActivitySummary) map[string]ActivitySummary {
+	result := make(map[string]ActivitySummary)
+	
+	for key, summary := range summaries {
+		// If duration is within limits, keep as-is
+		if summary.TotalDuration <= maxOfflineDuration {
+			result[key] = summary
+			continue
+		}
+		
+		// Split into chunks
+		numChunks := int(math.Ceil(float64(summary.TotalDuration) / float64(chunkSize)))
+		color.Yellow("[CHUNKING] %s duration (%v) exceeds 4h limit, splitting into %d chunks\n", 
+			summary.AppClass, summary.TotalDuration, numChunks)
+		
+		for i := 0; i < numChunks; i++ {
+			chunkKey := fmt.Sprintf("%s#chunk%d", key, i+1)
+			
+			// Calculate this chunk's time window
+			chunkStart := summary.FirstSeen.Add(time.Duration(i) * chunkSize)
+			remainingDuration := summary.TotalDuration - time.Duration(i)*chunkSize
+			
+			var chunkDuration time.Duration
+			if remainingDuration > chunkSize {
+				chunkDuration = chunkSize
+			} else {
+				chunkDuration = remainingDuration
+			}
+			
+			chunkEnd := chunkStart.Add(chunkDuration)
+			
+			// Create chunk summary
+			chunk := ActivitySummary{
+				AppClass:        summary.AppClass,
+				ActivityDetails: summary.ActivityDetails,
+				TotalDuration:   chunkDuration,
+				SessionCount:    1, // Each chunk is treated as one logical submission
+				FirstSeen:       chunkStart,
+				LastSeen:        chunkEnd,
+			}
+			
+			result[chunkKey] = chunk
+		}
+	}
+	
+	return result
+}
+
 // SubmitActivities submits all activity summaries to RescueTime.
 // Attempts native user_client_events API first if credentials are available,
 // falls back to offline_time_post API if native fails or credentials are missing.
+// Automatically splits summaries that exceed the 4-hour API limit into chunks.
 func (c *Client) SubmitActivities(summaries map[string]ActivitySummary) {
 	if len(summaries) == 0 {
 		// No activities to submit - silence is fine, no need to spam logs
 		return
 	}
+
+	// Split long-duration summaries into chunks (>4 hours → multiple <4h submissions)
+	summaries = splitLongDurationSummaries(summaries)
 
 	// Check if we have native API credentials
 	hasNativeCredentials := c.DataKey != "" || c.AccountKey != ""
